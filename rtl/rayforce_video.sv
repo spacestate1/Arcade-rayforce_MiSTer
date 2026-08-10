@@ -26,6 +26,10 @@ module rayforce_video
     input  logic [31:0] dl_bytes,
     input  logic [31:0] dl_sum,
     input  logic  [7:0] dl_index,
+    input  logic        trap_oor,
+    input  logic [31:0] wr_count,
+    input  logic [31:0] wr_hash,
+    input  logic [31:0] last_pc,
 
     output logic        ce_pix,       // clk / 8
     output logic  [7:0] r,
@@ -113,18 +117,23 @@ module rayforce_video
 
     // ---- three hex readouts, 8 digits each, glyphs doubled to 16x16 ------
     localparam int RX = 96;     // left edge of the readout block
-    localparam int RY = 56;     // top of row 0
-    localparam int RP = 32;     // row pitch
+    localparam int RY = 44;     // top of row 0
+    localparam int RP = 24;     // row pitch
 
-    wire [31:0] row_val [0:2];
+    // rows: dl bytes, dl checksum, flags, then the 68020 spike verdicts --
+    // write count (freezes at 0x1000), write-stream hash, last fetch PC
+    wire [31:0] row_val [0:5];
     assign row_val[0] = dl_bytes;
     assign row_val[1] = dl_sum;
-    assign row_val[2] = {8'h00, dl_index, 6'd0, dl_seen, dl_active};
+    assign row_val[2] = {8'h00, dl_index, 5'd0, trap_oor, dl_seen, dl_active};
+    assign row_val[3] = wr_count;
+    assign row_val[4] = wr_hash;
+    assign row_val[5] = last_pc;
 
     logic       text_on;
     always_comb begin
         text_on = 1'b0;
-        for (int rrow = 0; rrow < 3; rrow++) begin
+        for (int rrow = 0; rrow < 6; rrow++) begin
             automatic int ty = RY + rrow * RP;
             if (y >= ty && y < ty + 16 && x >= RX && x < RX + 128) begin
                 automatic logic [8:0] cx = x - RX[8:0];

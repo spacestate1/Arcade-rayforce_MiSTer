@@ -137,7 +137,7 @@ module emu
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
 assign {UART_RTS, UART_DTR} = 0;
-assign UART_TXD = 1'b1;                    // idle; the UART stream comes later
+// UART carries the spike's write-ring dump (see rf_uart_dump.sv)
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 
 // SDRAM parked safe: clock enable low, chip deselected, DQ released.
@@ -282,6 +282,39 @@ always @(posedge clk_sys) begin
     if (ioctl_wr) dl_index <= ioctl_index;
 end
 
+//////////////////////  68020 SPIKE  /////////////////////////////
+//
+// Held in reset until the ROM download has completed, then runs the real
+// boot code from BRAM. See rf_cpu_spike.sv for what is being measured.
+
+wire        cpu_reset = reset | ioctl_download | ~dl_seen;
+
+wire [31:0] wr_count, wr_hash, last_pc;
+wire        trap_oor;
+wire [11:0] ring_raddr, ring_wptr;
+wire [55:0] ring_rdata;
+
+rf_cpu_spike spike
+(
+    .clk(clk_sys),
+    .reset(cpu_reset),
+    .dl_wr(ioctl_wr && ioctl_index == 8'd0),
+    .dl_addr(ioctl_addr),
+    .dl_data(ioctl_dout),
+    .wr_count(wr_count), .wr_hash(wr_hash),
+    .last_pc(last_pc), .trap_oor(trap_oor),
+    .ring_raddr(ring_raddr), .ring_rdata(ring_rdata), .ring_wptr(ring_wptr)
+);
+
+rf_uart_dump uart_dump
+(
+    .clk(clk_sys),
+    .reset(cpu_reset),
+    .ring_wptr(ring_wptr), .ring_raddr(ring_raddr), .ring_rdata(ring_rdata),
+    .wr_hash(wr_hash),
+    .txd(UART_TXD)
+);
+
 ////////////////////////   VIDEO   ///////////////////////////////
 
 rayforce_video video
@@ -294,6 +327,10 @@ rayforce_video video
     .dl_bytes(dl_bytes),
     .dl_sum(dl_sum),
     .dl_index(dl_index),
+    .trap_oor(trap_oor),
+    .wr_count(wr_count),
+    .wr_hash(wr_hash),
+    .last_pc(last_pc),
 
     .ce_pix(ce_pix),
     .r(rgb_r), .g(rgb_g), .b(rgb_b),
