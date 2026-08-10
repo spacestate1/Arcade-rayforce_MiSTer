@@ -1,0 +1,83 @@
+<misterromdescription>
+  <name>Ray Force</name>
+  <setname>rayforce</setname>
+  <mameversion>0288</mameversion>
+  <rbf>Rayforce</rbf>
+  <year>1994</year>
+  <manufacturer>Taito America Corporation</manufacturer>
+  <category>Shoot</category>
+  <rotation>vertical</rotation>
+  <resolution>15kHz</resolution>
+  <players>2</players>
+  <joystick>8-way</joystick>
+  <num_buttons>2</num_buttons>
+
+  <buttons names="Shot,Bomb,-,-,-,-,Start,Coin,-,Pause"
+           default="A,B,R,L,Start"/>
+
+  <!-- No DIP switches: F3 boards are configured from the service menu. -->
+
+  <!-- ============================================================
+       Download stream, in region order, 0xB80000 bytes total. The
+       skeleton core only counts and checksums this; the offsets below
+       are the SDRAM map the real core will use, fixed now so the MRA
+       does not change when the core grows.
+
+         0x000000  maincpu   1 MB    4-way byte interleave
+         0x100000  audiocpu  512 KB  16-bit interleave (68000)
+         0x180000  sprites   2 MB    16-bit interleave
+         0x380000  sprites_hi 1 MB
+         0x480000  tilemap   2 MB    LOAD32_WORD pair
+         0x680000  tilemap_hi 1 MB
+         0x780000  ensoniq   4 MB    2x 2 MB, plain (lane spread is the
+                                     core's job; MAME loads them
+                                     LOAD16_BYTE into an 8 MB region)
+
+       The zip is the MERGED gunlock set; this MRA is the US Ray Force
+       version, which differs from Gunlock by exactly one program ROM
+       (d66-25 instead of d66-24 at ic35). Parts match by CRC, so the
+       subfolder layout inside the zip does not matter.
+       ============================================================ -->
+  <rom index="0" zip="rayforce.zip|gunlock.zip" md5="None">
+
+    <!-- maincpu: ROM_LOAD32_BYTE x4 -->
+    <interleave output="32">
+      <part name="d66-18.ic24" crc="8418513e" map="0001"/>
+      <part name="d66-19.ic26" crc="95731473" map="0010"/>
+      <part name="d66-21.ic37" crc="bd0d60f2" map="0100"/>
+      <part name="d66-25.ic35" crc="e08653ee" map="1000"/>
+    </interleave>
+
+    <!-- audiocpu 68000: ROM_LOAD16_BYTE pair -->
+    <interleave output="16">
+      <part name="d66-23.ic10" crc="57fb7c49" map="01"/>
+      <part name="d66-22.ic23" crc="83dd7f9b" map="10"/>
+    </interleave>
+
+    <!-- sprites: ROM_LOAD16_BYTE pair -->
+    <interleave output="16">
+      <part name="d66-03.ic45" crc="e7a4a491" map="01"/>
+      <part name="d66-04.ic46" crc="c1c7aaa7" map="10"/>
+    </interleave>
+
+    <!-- sprites_hi -->
+    <part name="d66-05.ic47" crc="a3cefe04"/>
+
+    <!-- tilemap: ROM_LOAD32_WORD pair -->
+    <interleave output="32">
+      <part name="d66-06.ic48" crc="b3d8126d" map="0021"/>
+      <part name="d66-07.ic49" crc="a6da9be7" map="2100"/>
+    </interleave>
+
+    <!-- tilemap_hi -->
+    <part name="d66-08.ic50" crc="9959f30b"/>
+
+    <!-- ensoniq sample ROMs, plain -->
+    <part name="d66-01.ic2" crc="58c92efa"/>
+    <part name="d66-02.ic3" crc="dcdafaab"/>
+  </rom>
+
+  <rom index="254" zip="rayforce.zip|gunlock.zip" type="nvram" md5="None">
+    <part>FF FF</part>
+  </rom>
+</misterromdescription>
