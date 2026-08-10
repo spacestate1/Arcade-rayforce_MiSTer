@@ -1,0 +1,10 @@
+# ROMs never enter git
+*.zip
+*.rom
+*.bin
+
+# build noise
+output_files/
+db/
+incremental_db/
+*.log
