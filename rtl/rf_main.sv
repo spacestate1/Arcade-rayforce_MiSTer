@@ -229,6 +229,14 @@ module rf_main
     logic [15:0] int3_tmr;
 
     // The autovector handler fetch is the acknowledge (see the header note).
+    //
+    // KNOWN LIMITATION: any data READ of VBR+0x68 / +0x6C while the IRQ is
+    // pending also counts. The one place that happens is the boot ROM
+    // checksum, which sweeps the vector table while interrupts are masked --
+    // it drops a pending IRQ2 the game was not going to service anyway, and
+    // is where the constant 380-frame offset between frame_cnt and irq2_cnt
+    // comes from. Once the game is running nothing reads the vector table as
+    // data, and the hardware acknowledge rate is exactly one per frame.
     wire vec_rd = clkena && (busstate == 2'b10);
     wire ack2   = irq2 && vec_rd && (a == (vbr[23:0] + 24'h68));
     wire ack3   = irq3 && vec_rd && (a == (vbr[23:0] + 24'h6C));

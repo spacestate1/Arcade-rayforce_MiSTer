@@ -206,6 +206,36 @@ changes between frames.
 **Fit**: timing met, worst setup slack +0.613 ns. 32% ALMs,
 **518 / 553 RAM blocks (94%)**.
 
+### Review notes (2026-08-27, end of session)
+
+A pass over everything written today, looking for defects rather than style.
+Six found, all fixed and re-verified in Verilator:
+
+- **93C46 READ was missing the dummy bit.** The chip emits a 0 on the clock
+  after the last address bit, THEN the 16 data bits. Without it the word
+  arrived one bit early and read back rotated. Caught by review, not by
+  hardware -- the game boots either way because it rewrites defaults over
+  corrupt settings. `make -C sim eeprom` now checks EWEN/WRITE/READ/idle.
+- **rf_selftest port B** evaluated the value mux on the unregistered row
+  while the field masks used the registered one -- a one-cycle skew that
+  rf_uart_log's wait states happened to hide.
+- **rf_video_line** spent a 3-cycle read on every subsection whether or not
+  anything was latched. Now skipped: mean 151 -> 112 clocks/line.
+- **rf_gfx_bus** silently dropped a request arriving while busy. Now has a
+  `busy` output and says so on the port; `pix` validity is documented.
+- **Diagnostic page** panel frame was drawn from the look-ahead x, one
+  pixel left of the panel. Cosmetic; page is superseded by the self-test.
+- **IRQ acknowledge limitation named in the RTL**: any data read of
+  VBR+0x68/0x6C while an IRQ is pending counts as an ack. That happens once,
+  in the boot ROM checksum with interrupts masked, and is where the constant
+  380-frame `frame_cnt - irq2_cnt` offset comes from. Not a gameplay issue
+  (hardware shows exactly one ack per frame) but it is now written down.
+
+Reviewed and left alone, deliberately: the control-port and EEPROM byte-lane
+decode (checked against `f3_control_w` case by case), the read-mux timing
+(identical to the validated spike), the BRAM read-during-write modes, and
+`f3_render.py`'s s16 wraparound in the sprite axis (matches MAME).
+
 ### Known issues carried forward
 
 - ~~UART compare needs manual pass alignment.~~ Fixed: `tools/rf_ring_check.py`

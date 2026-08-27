@@ -54,6 +54,10 @@ module rf_gfx_bus
     input  logic        req,           // one-cycle pulse
     output logic [95:0] pix,           // 16 pixels, 6 bits each, pixel 0 low
     output logic        valid,         // one-cycle pulse when pix is good
+    output logic        busy,          // a req while busy is DROPPED -- the
+                                       // caller must wait. pix is only
+                                       // guaranteed on the valid cycle and
+                                       // until the next request completes.
 
     // ---- SDRAM channels (clk_ram domain) --------------------------------
     input  logic        clk_ram,
@@ -99,7 +103,6 @@ module rf_gfx_bus
     // the fetch costs one round trip rather than two.
     logic  [3:0] r_row;
     logic        lo_got, hi_got;
-    logic        busy;
 
     always_ff @(posedge clk_cpu) begin
         valid <= 1'b0;

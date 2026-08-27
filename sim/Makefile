@@ -3,6 +3,7 @@
 #   make gfx    fetch tile rows through rf_gfx_bus and diff against f3_gfx.py
 #   make line   decode line RAM through rf_video_line and diff against f3_render.py
 #   make line-all  the same over every dumped frame
+#   make eeprom   93C46 protocol: EWEN, WRITE, READ with the dummy bit, idle DO
 #
 # Needs the gfx region dumps in ../dump -- see "How to run the video oracle"
 # in HANDOFF.md.
@@ -10,7 +11,7 @@ VERILATOR ?= verilator
 VFLAGS = -DVERILATOR --cc --exe --build -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 RTL = ../rtl
 
-.PHONY: gfx line line-all clean
+.PHONY: gfx line line-all eeprom clean
 
 gfx: obj_dir/gfxtb
 	./obj_dir/gfxtb ../dump fetched.txt
@@ -31,6 +32,12 @@ line_ref.txt: gen_line_ref.py ../tools/f3_render.py
 
 obj_dir/linetb: line_tb.cpp $(RTL)/rf_video_line.sv
 	$(VERILATOR) $(VFLAGS) --top-module rf_video_line $(RTL)/rf_video_line.sv line_tb.cpp -o linetb
+
+eeprom: obj_dir/eetb
+	./obj_dir/eetb
+
+obj_dir/eetb: ee_tb.cpp $(RTL)/rf_eeprom_93c46.sv
+	$(VERILATOR) $(VFLAGS) --top-module rf_eeprom_93c46 $(RTL)/rf_eeprom_93c46.sv ee_tb.cpp -o eetb
 
 clean:
 	rm -rf obj_dir fetched.txt line_out.txt line_ref.txt

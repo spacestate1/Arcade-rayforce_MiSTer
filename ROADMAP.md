@@ -156,7 +156,8 @@ Two findings the RTL has to honour:
            semantics (a value not re-latched on a line keeps the previous
            line's, which is how a game sets one zoom for a whole playfield).
            **30/30 dumped frames, 7680 lines, byte-identical to the model**
-           (`make -C sim line-all`). 151 clocks per line of the 3456 available.
+           (`make -C sim line-all`). Mean 112 / worst 151 clocks per line of the
+           3456 available.
      - [ ] `rf_video_pf.sv` -- playfield address generation: scroll, row
            scroll, column scroll, zoom, into the tile fetch
      - [ ] `rf_video_mix.sv` -- priority sort, clipping, blending circuit

@@ -160,10 +160,15 @@ module rf_video_line
                     st      <= S_DATA_A;
                 end
 
+                // A subsection nobody latched has nothing to read: skip the
+                // three-cycle access. Measured on Ray Force (which latches
+                // most subsections on most lines) this takes the mean from
+                // 151 to 112 clocks a line; worst case stays 151 when all 32
+                // are latched. Either way it is ~3-4% of the 3456 available.
                 S_DATA_A: begin
                     have_data <= alt_hit | nrm_hit;
                     lr_addr   <= want;
-                    st        <= S_DATA_W;
+                    st        <= (alt_hit | nrm_hit) ? S_DATA_W : S_NEXT;
                 end
                 S_DATA_W: st <= S_DATA_D;
 

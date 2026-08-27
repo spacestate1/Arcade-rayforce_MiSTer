@@ -89,6 +89,9 @@ module rf_selftest #(
     logic [31:0] val_a, val_b;
     logic  [1:0] sta_a, sta_b;
     logic  [4:0] row_a;
+    logic  [5:0] u_col_q;              // port B address, registered once so
+    logic  [4:0] u_row_q;              // the value mux and the field masks
+                                       // are evaluated for the SAME cell
 
 `define RF_ST_ROWS(ROW, VAL, STA)                                            \
     begin                                                                    \
@@ -144,7 +147,7 @@ module rf_selftest #(
     end
 
     always_comb `RF_ST_ROWS(row_a, val_a, sta_a)
-    always_comb `RF_ST_ROWS(u_row, val_b, sta_b)
+    always_comb `RF_ST_ROWS(u_row_q, val_b, sta_b)   // same cycle as the masks
 
     // ---- character composition ------------------------------------------
     // "PASS" / "FAIL" / "WAIT" / "BUSY" as four 6-bit codes each (ascii-0x20).
@@ -175,8 +178,6 @@ module rf_selftest #(
     );
 
     // ---- port B (UART) ---------------------------------------------------
-    logic [5:0] u_col_q;
-    logic [4:0] u_row_q;
     always_ff @(posedge clk) begin
         u_col_q <= u_col;
         u_row_q <= u_row;

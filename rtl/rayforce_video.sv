@@ -264,7 +264,7 @@ module rayforce_video
         br = 8'h10; bg = 8'h14; bb = 8'h20;             // dark blue field
 
         // frame of the palette panel
-        if (xn >= PX-2 && xn < PX+PW+2 && y >= PY-2 && y < PY+PH+2) begin
+        if (x >= PX-2 && x < PX+PW+2 && y >= PY-2 && y < PY+PH+2) begin
             br = 8'h40; bg = 8'h40; bb = 8'h40;
         end
         if (pal_win_r) begin

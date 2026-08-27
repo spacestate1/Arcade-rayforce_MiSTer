@@ -46,7 +46,7 @@ module rf_eeprom_93c46
     logic        wen;                // set by EWEN, cleared by EWDS
     logic        cs_d, sk_d;
     logic        shifting_out;
-    logic [15:0] dout_sr;
+    logic [16:0] dout_sr;            // {dummy 0, data}: READ emits a 0 first
     logic  [4:0] out_cnt;
     logic  [5:0] cmd_addr;
     logic  [1:0] cmd_op;
@@ -62,7 +62,11 @@ module rf_eeprom_93c46
     wire [7:0]  cmd_w  = {sr[6:0],  di};
     wire [15:0] data_w = {sr[14:0], di};
 
-    assign do_out = shifting_out ? dout_sr[15] : 1'b1;
+    // A READ answers with a dummy 0 on the clock after the last address bit,
+    // THEN the 16 data bits MSB first (93C46 datasheet, and eepromser.cpp).
+    // Without the dummy the whole word arrives one bit early and reads back
+    // rotated -- which the boot code would treat as corrupt settings.
+    assign do_out = shifting_out ? dout_sr[16] : 1'b1;
 
     integer i;
 
@@ -92,7 +96,7 @@ module rf_eeprom_93c46
                 if (sk_rise) begin
                     if (shifting_out) begin
                         // READ: one bit per clock, MSB first, then it wraps
-                        dout_sr <= {dout_sr[14:0], 1'b0};
+                        dout_sr <= {dout_sr[15:0], 1'b0};
                     end else if (!have_cmd) begin
                         // hunt for the leading 1, then take 8 more bits
                         if (bitcnt == 6'd0) begin
@@ -108,7 +112,7 @@ module rf_eeprom_93c46
                                 bitcnt   <= 6'd0;
                                 case (cmd_w[7:6])
                                     2'b10: begin                 // READ
-                                        dout_sr      <= mem[cmd_w[5:0]];
+                                        dout_sr      <= {1'b0, mem[cmd_w[5:0]]};
                                         shifting_out <= 1'b1;
                                     end
                                     2'b11: begin                 // ERASE

@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
     t->frame_start = 1; tick(); t->frame_start = 0; tick();
 
     FILE* out = fopen(outp, "w");
-    long long worst = 0;
+    long long worst = 0, total = 0;
     for (int sy = 0; sy < 256; sy++) {
         int y = 255 - sy;                       // flipscreen walk
         t->y = y;
@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
         long long c = 0;
         while (t->busy && c < 10000) { tick(); c++; }
         if (c > worst) worst = c;
+        total += c;
 
         fprintf(out, "%d %d", sy, y);
         for (int i = 0; i < 4; i++) fprintf(out, " %u", field64(t->clip_l, i, 9));
@@ -94,6 +95,6 @@ int main(int argc, char** argv) {
         fprintf(out, "\n");
     }
     fclose(out);
-    printf("decoded 256 lines, worst %lld clocks per line\n", worst);
+    printf("decoded 256 lines, mean %lld / worst %lld clocks per line\n", total / 256, worst);
     return 0;
 }
