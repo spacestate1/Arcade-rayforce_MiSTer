@@ -236,14 +236,13 @@ module rf_video_pf
     wire [3:0] mcnt_inc  = ({1'b0, mcnt} + 5'd1 == r_xsamp) ? 4'd0 : mcnt + 4'd1;
     wire [3:0] mcnt_next = (r_x == 9'd317) ? 4'd0 : mcnt_inc;
 
-    integer i;
     always_ff @(posedge clk) begin
         if (rd_start) begin
             r_bank  <= done_bank;
             r_xsamp <= d_xsamp;
             r_x     <= 9'd0;
             mcnt    <= mos_phase0(d_xsamp);
-            for (i = 0; i < 4; i = i + 1) begin
+            for (int i = 0; i < 4; i = i + 1) begin
                 acc[i]   <= d_fx_x[i];
                 held[i]  <= d_fx_x[i] - 24'(signed'({15'd0, d_xs[i]})) * 24'(signed'({20'd0, mos_phase0(d_xsamp)}));
                 r_xs[i]  <= d_xs[i];
@@ -253,7 +252,7 @@ module rf_video_pf
         end else if (rd_step) begin
             r_x  <= r_x + 9'd1;
             mcnt <= mcnt_next;
-            for (i = 0; i < 4; i = i + 1) begin
+            for (int i = 0; i < 4; i = i + 1) begin
                 acc[i] <= acc[i] + 24'(signed'({15'd0, r_xs[i]}));
                 if (mcnt_next == 4'd0)
                     held[i] <= acc[i] + 24'(signed'({15'd0, r_xs[i]}));
@@ -287,13 +286,13 @@ module rf_video_pf
             bst <= B_IDLE;
             wb  <= 1'b0;
             done_bank <= 1'b1;
-            for (i = 0; i < 4; i = i + 1) begin
+            for (int i = 0; i < 4; i = i + 1) begin
                 reg_sx[i] <= '0; fx_y[i] <= '0;
                 d_used[i] <= 1'b0; d_xs[i] <= 9'd256; d_fx_x[i] <= '0; d_mos[i] <= 1'b0;
             end
             d_xsamp <= 5'd16;
         end else if (frame_start) begin
-            for (i = 0; i < 4; i = i + 1) begin
+            for (int i = 0; i < 4; i = i + 1) begin
                 reg_sx[i] <= calc_sx(ctrl0[i], i);
                 fx_y[i]   <= calc_sy(ctrl0[i + 4], flip);
             end
@@ -387,7 +386,7 @@ module rf_video_pf
 
             // hand the line over; the y accumulators step for the next one
             B_DONE: if (!wr_active) begin
-                for (i = 0; i < 4; i = i + 1) begin
+                for (int i = 0; i < 4; i = i + 1) begin
                     d_fx_x[i] <= b_fx_x[i];
                     d_xs[i]   <= b_xs[i];
                     d_mos[i]  <= b_mos[i];

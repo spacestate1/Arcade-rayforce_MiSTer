@@ -27,3 +27,5 @@ sim/line_out.txt
 sim/line_ref.txt
 sim/pf_out*.txt
 sim/pf_ref*.txt
+sim/mix_out*.txt
+sim/mix_ref*.txt

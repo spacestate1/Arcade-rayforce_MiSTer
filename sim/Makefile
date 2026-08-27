@@ -7,6 +7,8 @@
 #   make pf       a frame of playfield lines through rf_video_pf vs the model
 #   make pf-mosaic  the same with mosaic forced on (Ray Force never uses it)
 #   make pf-all   the playfield bench over every dumped frame
+#   make mix      END TO END: decode + playfields + tile fetch + mixer vs MAME's frame
+#   make mix-all  the same over every frame that has its two predecessors dumped
 #
 # Needs the gfx region dumps in ../dump -- see "How to run the video oracle"
 # in HANDOFF.md.
@@ -14,7 +16,7 @@ VERILATOR ?= verilator
 VFLAGS = -DVERILATOR --cc --exe --build -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 RTL = ../rtl
 
-.PHONY: gfx line line-all eeprom pf pf-mosaic pf-all clean
+.PHONY: gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all clean
 
 gfx: obj_dir/gfxtb
 	./obj_dir/gfxtb ../dump fetched.txt
@@ -62,5 +64,19 @@ pf_ref.txt: gen_pf_ref.py ../tools/f3_render.py
 obj_dir/pftb: pf_tb.cpp pf_top.sv $(PF_RTL)
 	$(VERILATOR) $(VFLAGS) --top-module pf_top pf_top.sv $(PF_RTL) pf_tb.cpp -o pftb
 
+MIX_RTL = $(PF_RTL) $(RTL)/rf_video_mix.sv
+
+mix: obj_dir/mixtb mix_ref.txt
+	./obj_dir/mixtb ../dump 1800 mix_ref.txt mix_out.txt
+
+mix-all: obj_dir/mixtb
+	./run_mix_all.sh
+
+mix_ref.txt: gen_mix_ref.py ../tools/f3_render.py
+	python3 gen_mix_ref.py ../dump 1800 > $@
+
+obj_dir/mixtb: mix_tb.cpp mix_top.sv $(MIX_RTL)
+	$(VERILATOR) $(VFLAGS) --top-module mix_top mix_top.sv $(MIX_RTL) mix_tb.cpp -o mixtb
+
 clean:
-	rm -rf obj_dir fetched.txt line_out.txt line_ref.txt pf_out*.txt pf_ref*.txt
+	rm -rf obj_dir fetched.txt line_out.txt line_ref.txt pf_out*.txt pf_ref*.txt mix_out*.txt mix_ref*.txt

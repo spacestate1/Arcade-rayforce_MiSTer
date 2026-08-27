@@ -311,6 +311,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_uart_log.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_gfx_bus.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_line.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_pf.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_mix.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_main.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_eeprom_93c46.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_prog_bus.sv

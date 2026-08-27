@@ -172,10 +172,31 @@ Two findings the RTL has to honour:
            worst 2315 clocks per line of 3456, against a behavioural SDRAM
            with ~8 cpu-clock latency -- real controller latency will be
            higher, so this is the number to re-measure on hardware.
-     - [ ] `rf_video_mix.sv` -- priority sort, clipping, blending circuit.
-           Drives rf_video_pf's rd_start/rd_step at pixel pace; latches its
-           own copy of the line decode at line start, since the decoder has
-           moved on to the next line by then.
+     - [x] `rf_video_mix.sv` -- priority sort, clipping, the blending
+           circuit. Nine layers (4 playfields, 4 sprite groups, pivot)
+           stable-sorted by priority per line from MAME's base order -- the
+           tie order matters, Ray Force has equal-priority layers on most
+           lines -- then a nine-stage pipeline, one layer per stage, one
+           pixel per four clocks (the palette port is 16-bit and an RGB pair
+           is four reads). Latches its own copy of the line decode at line
+           start. **END TO END: 15/15 frames, 1,075,200 visible pixels
+           identical to MAME** through real line decode + playfield build +
+           SDRAM tile fetch + mixer (`make -C sim mix-all`), with sprites and
+           pivot fed from the model as stand-ins for their unbuilt RTL.
+           1307 clocks per line, concurrent with the next line's build.
+           Clip planes: implemented per pixel, equal to MAME for any single
+           plane and all-normal combinations; MAME's duplicate-range quirk
+           for several inverted planes is not reproduced. Ray Force never
+           enables a clip plane, so that path has NO dump coverage.
+   **None of rf_gfx_bus / rf_video_line / rf_video_pf / rf_video_mix has
+   been through Quartus yet** -- they are in the QSF but not instantiated in
+   Rayforce.sv. Wire the pipeline in (a raster-driven controller that
+   decodes line N+1, builds N+1 and mixes N against the beam) and build
+   BEFORE adding pivot and sprites, so that whatever Quartus 17 objects to
+   in the new code -- packed structs, generate stages, signed arithmetic --
+   is found while the pile is small. That build also re-measures the
+   per-line cost against the real SDRAM controller.
+
 3. - [ ] `rf_video_pivot.sv` -- text/pixel layer. Needs no SDRAM at all;
          char RAM and pivot RAM are already BRAM with a port B waiting.
 4. - [~] Verilator bench -- `sim/`, started. `make -C sim gfx` covers the
