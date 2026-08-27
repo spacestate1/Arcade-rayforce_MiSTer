@@ -23,3 +23,5 @@ rtl/rf_build_stamp.vh
 # Verilator bench build products
 sim/obj_dir/
 sim/fetched.txt
+sim/line_out.txt
+sim/line_ref.txt

@@ -150,9 +150,16 @@ Two findings the RTL has to honour:
          (`make -C sim gfx`), including 200 pseudo-random codes across the
          whole 16384-tile space. 11-12 cpu clocks per fetch, so a full line
          of four playfields costs ~1000 of the 3456 clocks available.
-2. - [ ] `rf_video_line.sv` + `rf_video_pf.sv` + `rf_video_mix.sv`. This is
-         the big one: per-line scroll, rowscroll, colscroll, zoom, clipping,
-         priority sort and the blending circuit.
+2. - [~] The big one, split three ways:
+     - [x] `rf_video_line.sv` -- the per-scanline effect decoder. Walks the
+           eight line-set sections and their subsections, honouring the latch
+           semantics (a value not re-latched on a line keeps the previous
+           line's, which is how a game sets one zoom for a whole playfield).
+           **30/30 dumped frames, 7680 lines, byte-identical to the model**
+           (`make -C sim line-all`). 151 clocks per line of the 3456 available.
+     - [ ] `rf_video_pf.sv` -- playfield address generation: scroll, row
+           scroll, column scroll, zoom, into the tile fetch
+     - [ ] `rf_video_mix.sv` -- priority sort, clipping, blending circuit
 3. - [ ] `rf_video_pivot.sv` -- text/pixel layer. Needs no SDRAM at all;
          char RAM and pivot RAM are already BRAM with a port B waiting.
 4. - [~] Verilator bench -- `sim/`, started. `make -C sim gfx` covers the
