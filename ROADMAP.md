@@ -153,29 +153,60 @@ Two findings the RTL has to honour:
          the same frame the Python model is checked against. `F3_ONLY=` in
          f3_render.py renders a matching layer subset, so a half-built
          renderer can be compared before it is finished.
-5. - [ ] Sprites, decided on measurement rather than on MAME's structure.
+5. - [ ] `rf_video_spr.sv` -- per-line bucket pre-pass, active set, line
+         buffer. No framebuffer: see the measurement below.
 
-**The sprite framebuffer question (decide before building sprites)**
+**The sprite framebuffer question -- answered by measurement**
 
 MAME keeps a full-screen sprite framebuffer because the F3 supports sprite
-trails (don't clear between frames). ~160 BRAM blocks, which does not fit.
-But across 30 dumped frames of attract mode:
+trails (don't clear it between frames). That is ~160 BRAM blocks, which the
+DE10-Nano does not have spare, and it is the only reason main RAM ever looked
+like it had to move to SDRAM.
+
+`tools/oracle_f3trails.lua` walks the sprite list the same way
+get_sprite_info() does -- following bank switches and jump commands -- once
+per frame, over 8842 frames of attract:
 
 ```
-sprite trails ever set : False
-max sprites per frame  : 230        (not the 1024 the list allows)
-framebuffer value      : 13 bits    (not 16)
-sprites 5bpp, both banks in use
+frames with trails    : 0
+command words ever set: 2100, 2101   (differ only in the bank bit)
+sprite list entries   : up to 812 per frame
+extra planes          : 1  (5bpp)
+banks                 : both, alternating every frame
 ```
 
-If trails are genuinely unused by this game, sprites can render per scanline
-into a line buffer and the 160 blocks are never needed. **Check this over a
-full playthrough before relying on it** -- 30 frames of attract mode does not
-rule out a boss effect. If a framebuffer IS needed, put the FRAMEBUFFER in
-SDRAM, not main RAM: it is written once per frame and read linearly per line,
-which suits SDRAM, whereas main RAM is latency-critical random access in the
-CPU's inner loop and is the worst thing in the design to put behind a
-wait-stated bus.
+Ray Force issues exactly two sprite command words for its entire run and the
+trails bit (word 5 bit 1) is never among them. And from the VRAM dumps:
+
+```
+sprites actually drawn : up to 230 per frame (mean 54)
+MAX SPRITES ON ONE LINE: 43
+```
+
+So the framebuffer is write-once/read-once-per-line, and the per-line load is
+in the tens. The intended design is therefore **no framebuffer at all**:
+
+- one pre-pass per frame over the 812 list entries (~6.5k clocks, and vblank
+  is ~103k) building a per-line "sprites starting here" bucket. A sprite
+  starts on exactly one line, so this is a linked list -- head per line plus
+  one next-pointer per sprite, a couple of blocks -- not a per-line array.
+- an active set maintained incrementally as the raster advances, drawn into a
+  double-buffered sprite line buffer.
+- 43 sprites x 16 px = ~700 pixel writes per line against 3456 clocks, so
+  there is roughly 5x headroom even if gameplay is far busier than attract.
+
+Estimated cost ~15-20 blocks against the 35 free, so **sprites need neither a
+framebuffer nor SDRAM nor the main-RAM migration**.
+
+Two things to get right when building it:
+
+- **Draw order is priority.** draw_sprites walks the list backwards and
+  writes only where the buffer is still empty, so later list entries win. An
+  active set ordered by start line does NOT preserve that -- keep the list
+  index and order the draw by it.
+- 43/line is attract mode. The design above has no hard per-line cap, only a
+  time budget, so a busier scene degrades into timing headroom rather than
+  dropped sprites. Keep it that way.
 
 **Exit criteria**
 - [ ] The Verilator bench matches the model (and therefore MAME) on all
