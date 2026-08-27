@@ -91,9 +91,9 @@ MAME, until the program is running its frame loop.
       UART (`rf_uart_log.sv`), both OSD-selectable; all 15 checks PASS on
       hardware, verified on screen and over /dev/ttyS1
 
-**BRAM is now the binding constraint: 518 / 553 blocks (94%).** Main RAM alone
-is 128 blocks. The sprite framebuffer below needs ~160. Main RAM has to move
-to SDRAM before sprites can be built.
+**BRAM is now the binding constraint: 518 / 553 blocks (94%).** That is a
+*sprite* problem, not a playfield one -- see 2c. The playfield, pivot and
+mixer path needs line buffers (~10-15 blocks), which fits in what is free.
 
 ### 2b: Video model (complete)
 
@@ -138,14 +138,44 @@ Two findings the RTL has to honour:
 | `rf_video_mix.sv` | priority sort, clipping, the blending circuit | `mix_line` / `render_line` |
 | `rf_video_spr.sv` | sprite list walk + framebuffer | `SpriteEngine` |
 
-**Sub-tasks**
-- [ ] Move main RAM to SDRAM to free 128 BRAM blocks
-- [ ] Tilemap gfx fetch from SDRAM (ch1/ch2) with the 4bpp + 2bpp plane pair
-- [ ] `rf_video_line.sv`, `rf_video_pf.sv`, `rf_video_mix.sv` — playfields first
-- [ ] `rf_video_pivot.sv` — text/pixel layer (no SDRAM needed, both RAMs are BRAM)
-- [ ] `rf_video_spr.sv` — sprites and the framebuffer
-- [ ] Verilator bench: load a VRAM dump, render, diff against the same frame
-      the Python model is checked against
+**Sub-tasks, in order**
+
+1. - [ ] SDRAM gfx **read** path on ch1/ch2 for `tilemap` + `tilemap_hi`,
+         with a tile-line cache. Read-only and line-cached, i.e. the same
+         shape as the proven `rf_prog_bus` -- not the same risk class as
+         moving main RAM.
+2. - [ ] `rf_video_line.sv` + `rf_video_pf.sv` + `rf_video_mix.sv`. This is
+         the big one: per-line scroll, rowscroll, colscroll, zoom, clipping,
+         priority sort and the blending circuit.
+3. - [ ] `rf_video_pivot.sv` -- text/pixel layer. Needs no SDRAM at all;
+         char RAM and pivot RAM are already BRAM with a port B waiting.
+4. - [ ] Verilator bench: load a VRAM dump into the RTL, render, diff against
+         the same frame the Python model is checked against. `F3_ONLY=` in
+         f3_render.py renders a matching layer subset, so a half-built
+         renderer can be compared before it is finished.
+5. - [ ] Sprites, decided on measurement rather than on MAME's structure.
+
+**The sprite framebuffer question (decide before building sprites)**
+
+MAME keeps a full-screen sprite framebuffer because the F3 supports sprite
+trails (don't clear between frames). ~160 BRAM blocks, which does not fit.
+But across 30 dumped frames of attract mode:
+
+```
+sprite trails ever set : False
+max sprites per frame  : 230        (not the 1024 the list allows)
+framebuffer value      : 13 bits    (not 16)
+sprites 5bpp, both banks in use
+```
+
+If trails are genuinely unused by this game, sprites can render per scanline
+into a line buffer and the 160 blocks are never needed. **Check this over a
+full playthrough before relying on it** -- 30 frames of attract mode does not
+rule out a boss effect. If a framebuffer IS needed, put the FRAMEBUFFER in
+SDRAM, not main RAM: it is written once per frame and read linearly per line,
+which suits SDRAM, whereas main RAM is latency-critical random access in the
+CPU's inner loop and is the worst thing in the design to put behind a
+wait-stated bus.
 
 **Exit criteria**
 - [ ] The Verilator bench matches the model (and therefore MAME) on all
