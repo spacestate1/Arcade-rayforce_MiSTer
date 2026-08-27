@@ -25,3 +25,5 @@ sim/obj_dir/
 sim/fetched.txt
 sim/line_out.txt
 sim/line_ref.txt
+sim/pf_out*.txt
+sim/pf_ref*.txt

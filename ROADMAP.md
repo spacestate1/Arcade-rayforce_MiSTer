@@ -158,9 +158,24 @@ Two findings the RTL has to honour:
            **30/30 dumped frames, 7680 lines, byte-identical to the model**
            (`make -C sim line-all`). Mean 112 / worst 151 clocks per line of the
            3456 available.
-     - [ ] `rf_video_pf.sv` -- playfield address generation: scroll, row
-           scroll, column scroll, zoom, into the tile fetch
-     - [ ] `rf_video_mix.sv` -- priority sort, clipping, blending circuit
+     - [x] `rf_video_pf.sv` -- the four playfields, one line at a time:
+           scroll, row scroll, column scroll, x/y zoom, flipscreen, per-tile
+           flips, the 6bpp pen mask, MAME's row-usage skip (a row of all-0
+           codes draws nothing even though tile 0 is opaque -- a visible
+           behaviour, reproduced), and mosaic sample-and-hold on the read
+           side. Source-indexed 512-entry line buffers, double-banked, read
+           by an x_scale accumulator so the mixer sees all four playfields
+           per pixel with no multiply.
+           **30/30 dumped frames, every compared pixel identical to the
+           model** (`make -C sim pf-all`), plus mosaic forced on (`pf-mosaic`)
+           because Ray Force never uses it. Decode+build: mean ~1700-2000 /
+           worst 2315 clocks per line of 3456, against a behavioural SDRAM
+           with ~8 cpu-clock latency -- real controller latency will be
+           higher, so this is the number to re-measure on hardware.
+     - [ ] `rf_video_mix.sv` -- priority sort, clipping, blending circuit.
+           Drives rf_video_pf's rd_start/rd_step at pixel pace; latches its
+           own copy of the line decode at line start, since the decoder has
+           moved on to the next line by then.
 3. - [ ] `rf_video_pivot.sv` -- text/pixel layer. Needs no SDRAM at all;
          char RAM and pivot RAM are already BRAM with a port B waiting.
 4. - [~] Verilator bench -- `sim/`, started. `make -C sim gfx` covers the
@@ -222,6 +237,13 @@ Two things to get right when building it:
 - 43/line is attract mode. The design above has no hard per-line cap, only a
   time budget, so a busier scene degrades into timing headroom rather than
   dropped sprites. Keep it that way.
+
+**SDRAM channels are spoken for.** ch1/ch2 carry the two tile planes, ch3 is
+the CPU. Sprites also need two planes (sprites + sprites_hi) and only ch4 is
+left, so sprites either take both fetches sequentially on ch4 or share
+ch1/ch2 with the tiles under an arbiter (tiles build during one part of the
+line, sprites another). Decide when building rf_video_spr; the tile budget
+above leaves ~1100 clocks a line unspoken for.
 
 **Exit criteria**
 - [ ] The Verilator bench matches the model (and therefore MAME) on all
