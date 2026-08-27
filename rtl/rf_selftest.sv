@@ -1,0 +1,275 @@
+//============================================================================
+//  Ray Force -- core self-test page
+//
+//  A 40x28 character pass/fail page over the 320x224 raster, so a bring-up
+//  run on real hardware reports what worked instead of leaving a screen full
+//  of unlabelled hex to be decoded by eye. Same idea as the Raiden II core's
+//  self-test, and for the same reason: the download path, the SDRAM
+//  controller, the CPU's memory decode and the interrupt handshake have no
+//  simulation coverage, and those are exactly the blocks that fail silently.
+//
+//  The page is deliberately independent of the video chipset: it reads only
+//  its own two ROMs, so it still renders when the renderer is half-written or
+//  completely dead.
+//
+//  THE SAME CHARACTERS GO OUT THE UART. Port B of the page ROM and a second
+//  copy of the value/status mux are brought out on (u_row, u_col) -> u_char,
+//  and rf_uart_log walks that port. Serial and screen are the same page by
+//  construction, not by two pieces of code that have to be kept in step.
+//
+//  Static text and the layout constants come from
+//  tools/make_selftest_page.py -> rf_selftest_page.sv.
+//============================================================================
+
+import rf_selftest_pkg::*;
+
+module rf_selftest #(
+    parameter int H_START = 46,
+    parameter int V_START = 31
+) (
+    input  logic        clk,
+    input  logic  [2:0] div,          // clk/8 phase from the video timing
+    input  logic  [8:0] hcnt,
+    input  logic  [8:0] vcnt,
+
+    // ---- what the page reports ------------------------------------------
+    input  logic        dl_active,
+    input  logic        dl_seen,
+    input  logic [31:0] dl_bytes,
+    input  logic [31:0] dl_sum,
+    input  logic [31:0] bist_sum,
+    input  logic        bist_done,
+    input  logic [31:0] wr_count,
+    input  logic [31:0] wr_hash,
+    input  logic [31:0] last_pc,
+    input  logic        trap_oor,
+    input  logic [15:0] frame_cnt,
+    input  logic [15:0] irq2_cnt,
+    input  logic [15:0] irq3_cnt,
+    input  logic [15:0] irq2_rate,
+    input  logic [15:0] irq3_rate,
+    input  logic        irq_rate_valid,
+    input  logic [15:0] pal_wr_cnt,
+    input  logic [15:0] pf_wr_cnt,
+    input  logic [15:0] spr_wr_cnt,
+    input  logic [15:0] line_wr_cnt,
+    input  logic [15:0] txt_wr_cnt,
+    input  logic [31:0] build_hex,
+
+    // ---- pixel output ----------------------------------------------------
+    output logic [23:0] rgb,
+
+    // ---- character port for rf_uart_log ---------------------------------
+    input  logic  [4:0] u_row,
+    input  logic  [5:0] u_col,
+    output logic  [7:0] u_char        // ascii, valid 2 clocks after the address
+);
+
+    // Expected values. Phase 0/1 established every one of these against MAME
+    // or against tools/rf_stream_sum.py; they are constants here so the board
+    // says PASS or FAIL by itself instead of handing back a number to compare.
+    localparam logic [31:0] EXP_BYTES = 32'h00B80000;
+    localparam logic [31:0] EXP_SUM   = 32'h77E1C279;
+    localparam logic [31:0] EXP_BIST  = 32'hD53D7C04;
+    localparam logic [31:0] EXP_WRC   = 32'h00001000;
+    localparam logic [31:0] EXP_HASH  = 32'h10620931;
+    localparam logic [15:0] EXP_RATE  = 16'd64;      // one ack per frame
+
+    localparam logic [1:0] ST_WAIT = 2'd0;
+    localparam logic [1:0] ST_BUSY = 2'd1;
+    localparam logic [1:0] ST_PASS = 2'd2;
+    localparam logic [1:0] ST_FAIL = 2'd3;
+
+    wire cpu_running = bist_done && !dl_active;
+
+    // ---- value / status per row -----------------------------------------
+    // Written out twice (once per read port) rather than as a function:
+    // quartus_map 17.0 is unreliable elaborating functions in this design,
+    // and the duplication is a plain mux either way.
+    logic [31:0] val_a, val_b;
+    logic  [1:0] sta_a, sta_b;
+    logic  [4:0] row_a;
+
+`define RF_ST_ROWS(ROW, VAL, STA)                                            \
+    begin                                                                    \
+        VAL = 32'h0; STA = ST_WAIT;                                          \
+        case (ROW)                                                           \
+        5'd4:  begin VAL = dl_bytes;                                         \
+                 STA = !dl_seen  ? ST_WAIT :                                 \
+                       dl_active ? ST_BUSY :                                 \
+                       (dl_bytes == EXP_BYTES) ? ST_PASS : ST_FAIL; end      \
+        5'd5:  begin VAL = dl_sum;                                           \
+                 STA = !dl_seen  ? ST_WAIT :                                 \
+                       dl_active ? ST_BUSY :                                 \
+                       (dl_sum == EXP_SUM) ? ST_PASS : ST_FAIL; end          \
+        5'd6:  begin VAL = bist_sum;                                         \
+                 STA = bist_done ? ((bist_sum == EXP_BIST) ? ST_PASS : ST_FAIL) \
+                     : (dl_seen && !dl_active) ? ST_BUSY : ST_WAIT; end      \
+        5'd9:  begin VAL = wr_count;                                         \
+                 STA = (wr_count == EXP_WRC) ? ST_PASS :                     \
+                       (wr_count != 32'h0)   ? ST_BUSY : ST_WAIT; end        \
+        5'd10: begin VAL = wr_hash;                                          \
+                 STA = (wr_count == EXP_WRC) ?                               \
+                         ((wr_hash == EXP_HASH) ? ST_PASS : ST_FAIL)         \
+                     : (wr_count != 32'h0) ? ST_BUSY : ST_WAIT; end          \
+        5'd11: begin VAL = {31'd0, trap_oor};                                \
+                 STA = trap_oor ? ST_FAIL :                                  \
+                       cpu_running ? ST_PASS : ST_WAIT; end                  \
+        5'd12: VAL = last_pc;                                                \
+        5'd15: VAL = {16'd0, frame_cnt};                                     \
+        5'd16: begin VAL = {irq2_rate, irq2_cnt};                            \
+                 STA = !irq_rate_valid ? ST_WAIT :                           \
+                       (irq2_rate == EXP_RATE) ? ST_PASS : ST_FAIL; end      \
+        5'd17: begin VAL = {irq3_rate, irq3_cnt};                            \
+                 STA = !irq_rate_valid ? ST_WAIT :                           \
+                       (irq3_rate == EXP_RATE) ? ST_PASS : ST_FAIL; end      \
+        5'd20: begin VAL = {16'd0, pal_wr_cnt};                              \
+                 STA = (pal_wr_cnt  != 16'd0) ? ST_PASS :                    \
+                       cpu_running ? ST_BUSY : ST_WAIT; end                  \
+        5'd21: begin VAL = {16'd0, pf_wr_cnt};                               \
+                 STA = (pf_wr_cnt   != 16'd0) ? ST_PASS :                    \
+                       cpu_running ? ST_BUSY : ST_WAIT; end                  \
+        5'd22: begin VAL = {16'd0, spr_wr_cnt};                              \
+                 STA = (spr_wr_cnt  != 16'd0) ? ST_PASS :                    \
+                       cpu_running ? ST_BUSY : ST_WAIT; end                  \
+        5'd23: begin VAL = {16'd0, line_wr_cnt};                             \
+                 STA = (line_wr_cnt != 16'd0) ? ST_PASS :                    \
+                       cpu_running ? ST_BUSY : ST_WAIT; end                  \
+        5'd24: begin VAL = {16'd0, txt_wr_cnt};                              \
+                 STA = (txt_wr_cnt  != 16'd0) ? ST_PASS :                    \
+                       cpu_running ? ST_BUSY : ST_WAIT; end                  \
+        5'd26: VAL = build_hex;                                              \
+        default: ;                                                           \
+        endcase                                                              \
+    end
+
+    always_comb `RF_ST_ROWS(row_a, val_a, sta_a)
+    always_comb `RF_ST_ROWS(u_row, val_b, sta_b)
+
+    // ---- character composition ------------------------------------------
+    // "PASS" / "FAIL" / "WAIT" / "BUSY" as four 6-bit codes each (ascii-0x20).
+    function automatic logic [5:0] st_char(input logic [1:0] st, input logic [1:0] i);
+        logic [31:0] word;
+        case (st)
+            ST_PASS: word = "PASS";
+            ST_FAIL: word = "FAIL";
+            ST_BUSY: word = "BUSY";
+            default: word = "WAIT";
+        endcase
+        st_char = 6'(word[8*(3-i) +: 8] - 8'h20);
+    endfunction
+
+    function automatic logic [5:0] hex_char(input logic [3:0] n);
+        hex_char = (n < 4'd10) ? 6'(6'd16 + n)          // '0' is 0x30-0x20
+                               : 6'(6'd33 + n - 6'd10); // 'A' is 0x41-0x20
+    endfunction
+
+    // Port A: the pixel renderer. Port B: the UART.
+    logic [10:0] pg_a_addr, pg_b_addr;
+    logic  [5:0] pg_a_char, pg_b_char;
+
+    rf_selftest_page page (
+        .clk(clk),
+        .a_addr(pg_a_addr), .a_char(pg_a_char),
+        .b_addr(pg_b_addr), .b_char(pg_b_char)
+    );
+
+    // ---- port B (UART) ---------------------------------------------------
+    logic [5:0] u_col_q;
+    logic [4:0] u_row_q;
+    always_ff @(posedge clk) begin
+        u_col_q <= u_col;
+        u_row_q <= u_row;
+    end
+    assign pg_b_addr = 11'(u_row * ST_COLS + u_col);
+
+    wire       u_in_val = ST_VAL_ROWS[u_row_q] &&
+                          (u_col_q >= ST_VAL_C0) && (u_col_q < ST_VAL_C0 + ST_VAL_W);
+    wire       u_in_st  = ST_ST_ROWS[u_row_q] &&
+                          (u_col_q >= ST_ST_C0) && (u_col_q < ST_ST_C0 + ST_ST_W);
+    wire [2:0] u_vi     = 3'(u_col_q - ST_VAL_C0[5:0]);
+    wire [1:0] u_si     = 2'(u_col_q - ST_ST_C0[5:0]);
+    wire [5:0] u_code   = u_in_val ? hex_char(val_b[4*(3'd7 - u_vi) +: 4])
+                        : u_in_st  ? st_char(sta_b, u_si)
+                                   : pg_b_char;
+    assign u_char = 8'h20 + {2'b00, u_code};
+
+    // ---- port A (screen) -------------------------------------------------
+    // Fetched on the div phases, the same shape the palette panel uses: the
+    // page ROM and the font ROM are each one clock, and a character cell is
+    // 64 clocks wide, so there is room to spare. The cell is taken from the
+    // pixel ce_pix is about to present, not the one on screen now.
+    wire [8:0] xn = hcnt + 9'd1 - H_START[8:0];
+    wire [8:0] yv = vcnt - V_START[8:0];
+    wire       in_page = (xn < 9'd320) && (yv < 9'd224);
+
+    // Outside the page xn/yv have wrapped, so row/col are clamped to a blank
+    // row before they index the ROM or the row-mask constants.
+    wire [5:0] col_n = in_page ? xn[8:3] : 6'd0;
+    wire [4:0] row_n = in_page ? yv[7:3] : 5'd2;
+    wire [2:0] gcol  = xn[2:0];
+    wire [2:0] grow  = yv[2:0];
+
+    assign pg_a_addr = 11'(row_n * ST_COLS + col_n);
+    always_comb row_a = row_n;
+
+    wire       a_in_val = ST_VAL_ROWS[row_n] &&
+                          (col_n >= ST_VAL_C0) && (col_n < ST_VAL_C0 + ST_VAL_W);
+    wire       a_in_st  = ST_ST_ROWS[row_n] &&
+                          (col_n >= ST_ST_C0) && (col_n < ST_ST_C0 + ST_ST_W);
+    wire [2:0] a_vi     = 3'(col_n - ST_VAL_C0[5:0]);
+    wire [1:0] a_si     = 2'(col_n - ST_ST_C0[5:0]);
+    wire [5:0] a_code   = a_in_val ? hex_char(val_a[4*(3'd7 - a_vi) +: 4])
+                        : a_in_st  ? st_char(sta_a, a_si)
+                                   : pg_a_char;
+
+    logic [5:0] font_code;
+    logic [2:0] font_row;
+    wire  [7:0] font_bits;
+
+    rf_font8x8 font (.clk(clk), .code(font_code), .row(font_row), .bits(font_bits));
+
+    // Colour by field: headers cyan, labels grey, values white, and the
+    // status word carries the verdict so a failure is visible from across
+    // the room.
+    localparam logic [23:0] C_HEAD  = 24'h50D0F0;
+    localparam logic [23:0] C_LABEL = 24'hB0B0B0;
+    localparam logic [23:0] C_VALUE = 24'hFFFFFF;
+    localparam logic [23:0] C_PASS  = 24'h40E040;
+    localparam logic [23:0] C_FAIL  = 24'hFF4040;
+    localparam logic [23:0] C_WAIT  = 24'hE0C040;
+    localparam logic [23:0] C_BG    = 24'h101828;
+
+    logic [23:0] cell_col;
+    always_comb begin
+        if (a_in_st)
+            cell_col = (sta_a == ST_PASS) ? C_PASS :
+                       (sta_a == ST_FAIL) ? C_FAIL : C_WAIT;
+        else if (a_in_val)                cell_col = C_VALUE;
+        else if (row_n <= 5'd1)           cell_col = C_HEAD;
+        else if (pg_a_char == 6'd13)      cell_col = C_HEAD;   // '-' rule rows
+        else                              cell_col = C_LABEL;
+    end
+
+    logic [23:0] fg_q;
+    logic [2:0]  bit_q;
+    logic        page_q;
+
+    always_ff @(posedge clk) begin
+        case (div)
+            // div 0 is the clock the cell address changes on, so the page ROM
+            // output is only good from div 1; latch at div 2 and the font ROM
+            // then has until div 7 to answer.
+            3'd2: begin
+                font_code <= a_code;
+                font_row  <= grow;
+                fg_q      <= cell_col;
+                bit_q     <= gcol;
+                page_q    <= in_page;
+            end
+            3'd7: rgb <= (page_q && font_bits[3'd7 - bit_q]) ? fg_q : C_BG;
+            default: ;
+        endcase
+    end
+
+endmodule

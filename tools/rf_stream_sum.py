@@ -68,3 +68,14 @@ for i in range(0, total, 2):
 
 print(f"stream bytes : 0x{total:08X}  <- screen row 1")
 print(f"checksum     : 0x{s:08X}  <- screen row 2")
+
+# Phase 1 readback BIST: the FULL 1 MB maincpu region (start of the stream),
+# read back through the SDRAM fetch path as the CPU sees it -- big-endian
+# 16-bit words -- folded rotl1+add with the sum seeded at 0.
+# Must match screen row 7 (bist_sum).
+b = 0
+for i in range(0, 0x100000, 2):
+    w = (stream[i] << 8) | stream[i + 1]
+    b = ((((b << 1) | (b >> 31)) & 0xFFFFFFFF) + w) & 0xFFFFFFFF
+
+print(f"bist sum     : 0x{b:08X}  <- screen row 7")

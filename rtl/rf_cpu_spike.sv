@@ -3,8 +3,8 @@
 //
 //  THE question this answers: is TG68K.C's "68020 (only some parts - yet)"
 //  good enough to execute Ray Force's boot sequence exactly as MAME's 68020
-//  does? No simulator is involved: the board runs the CPU against BRAM
-//  copies of the real ROM, and the ARCHITECTURAL WRITE STREAM is compared
+//  does? No simulator is involved: the board runs the CPU against the real
+//  ROM image in SDRAM, and the ARCHITECTURAL WRITE STREAM is compared
 //  against MAME's, captured with a debugger watchpoint log.
 //
 //  Why writes and not PCs: TG68K prefetches, so its fetch addresses lead the
@@ -16,7 +16,8 @@
 //  Memory model, from a MAME access profile of the first emulated second
 //  (99.998% of early data reads are ROM; VRAM is written long before it is
 //  read; palette IS read back early):
-//     0x000000-0x03FFFF  ROM, first 256 KB, captured from the ioctl download
+//     0x000000-0x0FFFFF  ROM, full 1 MB maincpu region, in SDRAM via
+//                        rf_prog_bus (Phase 1); fetch/read wait-stated
 //     0x400000-0x41FFFF  RAM 128 KB (+ mirror at 0x420000)
 //     0x440000-0x447FFF  palette RAM 32 KB (boot reads it back)
 //     0x4A0000-0x4A001F  control: reads return 0x00 (RMW targets only in the
@@ -26,8 +27,13 @@
 //
 //  Verdicts on screen: write count, rolling write-stream hash (the offline
 //  tool prints the expected value), and the last code-fetch address. A trap
-//  flag latches if the CPU fetches outside the modelled ROM -- the honest
+//  flag latches if the CPU fetches outside the modelled ROM/RAM -- the honest
 //  "this window is over" marker, not an error.
+//
+//  BRAMs are EXPLICIT altsyncram instances (rf_bram*), not inferred arrays.
+//  Inferred 128K-deep byte-sliced arrays sent quartus_map 17.0 past 6.6 GB
+//  of memory without terminating (2026-08-10, Propcycle); the explicit
+//  instances make the mapping a lookup instead of a search.
 //============================================================================
 
 module rf_cpu_spike
@@ -35,36 +41,24 @@ module rf_cpu_spike
     input  logic        clk,           // 53.372 MHz
     input  logic        reset,         // hold high until the download is done
 
-    // ROM capture from the ioctl stream (index 0, bytes 0..0x3FFFF)
-    input  logic        dl_wr,
-    input  logic [26:0] dl_addr,
-    input  logic [15:0] dl_data,       // [7:0]=even byte, [15:8]=odd byte
+    // program ROM read port (rf_prog_bus client, line-cached SDRAM fetch)
+    output logic [21:1] prog_addr,
+    output logic        prog_req,      // one-cycle pulse
+    input  logic [15:0] prog_data,
+    input  logic        prog_valid,    // one-cycle pulse when data is good
 
     // live readouts for the diagnostic screen
     output logic [31:0] wr_count,
     output logic [31:0] wr_hash,
     output logic [31:0] last_pc,
-    output logic        trap_oor,      // code fetch left the 256 KB window
+    output logic        trap_oor,      // code fetch left the ROM/RAM windows
 
     // write-ring dump port (UART side)
     input  logic [11:0] ring_raddr,
     output logic [55:0] ring_rdata,
-    output logic [11:0] ring_wptr
+    output logic [11:0] ring_wptr,
+    output logic        ring_full     // 4096 entries captured (wptr wrapped)
 );
-
-    // ---- memories --------------------------------------------------------
-    // ROM as two byte lanes so the 68020's big-endian 16-bit bus reads
-    // {even, odd} directly. The ioctl stream is the region image in address
-    // order: dout[7:0] is the EVEN byte, which is the UPPER (big-endian)
-    // half of the bus word.
-    (* ramstyle = "no_rw_check" *) logic [15:0] rom  [0:131071];  // 256 KB
-    (* ramstyle = "no_rw_check" *) logic [15:0] ram  [0:65535];   // 128 KB
-    (* ramstyle = "no_rw_check" *) logic [15:0] pal  [0:16383];   // 32 KB
-
-    always_ff @(posedge clk) begin
-        if (dl_wr && dl_addr < 27'h40000)
-            rom[dl_addr[17:1]] <= {dl_data[7:0], dl_data[15:8]};
-    end
 
     // ---- CPU -------------------------------------------------------------
     logic        clkena;
@@ -73,7 +67,51 @@ module rf_cpu_spike
     logic        nWr, nUDS, nLDS;
     logic [1:0]  busstate;              // 00 fetch, 10 read, 11 write, 01 none
 
-    always_ff @(posedge clk) clkena <= reset ? 1'b0 : ~clkena;
+    // Wait-state engine (ported from Propcycle's propcycle_main.sv): the CPU
+    // runs 2-cycle ops for BRAM/stub targets; a ROM access (fetch or data
+    // read) issues one prog_bus request and holds clkena low until the data
+    // comes back. THE BOOT-BUG RULE: `a` is sampled ONLY while clkena is low
+    // -- once clkena pulses, addr_out belongs to the next op.
+    logic        rom_wait;
+    logic        prog_valid_lat;
+    logic [15:0] prog_data_lat;
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            clkena    <= 1'b0;
+            rom_wait  <= 1'b0;
+            prog_req  <= 1'b0;
+        end else begin
+            prog_req <= 1'b0;
+            clkena   <= 1'b0;
+
+            if (rom_wait) begin
+                if (prog_valid_lat) begin
+                    rom_wait <= 1'b0;
+                    clkena   <= 1'b1;
+                end
+            end else if (!clkena) begin
+                // fresh-address cycle: `a` belongs to the op about to run
+                if (sel_rom && (busstate == 2'b00 || busstate == 2'b10)) begin
+                    prog_addr <= a[21:1];
+                    prog_req  <= 1'b1;
+                    rom_wait  <= 1'b1;
+                end else begin
+                    clkena <= 1'b1;        // BRAM/stub/idle: 2-cycle op
+                end
+            end
+            // clkena high: `a` is stale, do nothing (the boot-bug rule)
+        end
+    end
+
+    // prog_valid is a pulse; latch it (and the data) until consumed
+    always_ff @(posedge clk) begin
+        if (reset || clkena) prog_valid_lat <= 1'b0;
+        else if (prog_valid) begin
+            prog_valid_lat <= 1'b1;
+            prog_data_lat  <= prog_data;
+        end
+    end
 
     TG68KdotC_Kernel #(
         .SR_Read(2), .VBR_Stackframe(2), .extAddr_Mode(2),
@@ -104,37 +142,43 @@ module rf_cpu_spike
         .VBR_out()
     );
 
-    // ---- read mux --------------------------------------------------------
+    // ---- address decode --------------------------------------------------
     wire [23:0] a        = cpu_addr[23:0];
-    wire        sel_rom  = (a < 24'h040000);
+    wire        sel_rom  = (a < 24'h100000);   // full 1 MB maincpu, in SDRAM
     wire        sel_ram  = (a[23:17] == 7'b0100000) || (a[23:17] == 7'b0100001); // 0x400000+mirror
     wire        sel_pal  = (a[23:15] == 9'b010001000);                           // 0x440000-0x447FFF
 
-    logic [15:0] rom_q, ram_q, pal_q;
+    wire cpu_wr = !nWr && (busstate == 2'b11) && clkena;
+
+    // ---- memories --------------------------------------------------------
+    // RAM and palette stay in explicit BRAMs; the ROM is in SDRAM and comes
+    // back through the prog_bus wait-state engine above.
+    wire [15:0] ram_q, pal_q;
+
+    rf_bram_be #(.AW(16)) u_ram (
+        .clk(clk),
+        .waddr(a[16:1]), .wdata(cpu_dout),
+        .wren(cpu_wr && sel_ram), .be({~nUDS, ~nLDS}),
+        .raddr(a[16:1]), .q(ram_q)
+    );
+
+    rf_bram_be #(.AW(14)) u_pal (
+        .clk(clk),
+        .waddr(a[14:1]), .wdata(cpu_dout),
+        .wren(cpu_wr && sel_pal), .be({~nUDS, ~nLDS}),
+        .raddr(a[14:1]), .q(pal_q)
+    );
+
+    // ---- read mux --------------------------------------------------------
     logic [1:0]  sel_q;                 // registered with the RAM outputs
 
     always_ff @(posedge clk) begin
-        rom_q <= rom[a[17:1]];
-        ram_q <= ram[a[16:1]];
-        pal_q <= pal[a[14:1]];
         sel_q <= sel_rom ? 2'd0 : sel_ram ? 2'd1 : sel_pal ? 2'd2 : 2'd3;
-
-        // byte-lane writes
-        if (!nWr && busstate == 2'b11 && clkena) begin
-            if (sel_ram) begin
-                if (!nUDS) ram[a[16:1]][15:8] <= cpu_dout[15:8];
-                if (!nLDS) ram[a[16:1]][7:0]  <= cpu_dout[7:0];
-            end
-            if (sel_pal) begin
-                if (!nUDS) pal[a[14:1]][15:8] <= cpu_dout[15:8];
-                if (!nLDS) pal[a[14:1]][7:0]  <= cpu_dout[7:0];
-            end
-        end
     end
 
     always_comb begin
         case (sel_q)
-            2'd0: cpu_din = rom_q;
+            2'd0: cpu_din = prog_data_lat;   // ROM word from the prog_bus
             2'd1: cpu_din = ram_q;
             2'd2: cpu_din = pal_q;
             default: cpu_din = 16'h0000;   // control regs read as 0 for now
@@ -145,13 +189,16 @@ module rf_cpu_spike
     // One entry per bus write cycle the kernel actually advanced through
     // (clkena high), which is exactly one entry per 16-bit bus operation.
     // 4096 entries: {lanes[1:0], addr[23:1]+pad, data} -> 56 bits.
-    (* ramstyle = "no_rw_check" *) logic [55:0] ring [0:4095];
+
+    wire wr_frozen = wr_count[12];   // 4096 reached
+
+    // At exactly 4096 writes the 12-bit ring_wptr wraps to 0; ring_full is
+    // how the UART dumper tells "wrapped and full" apart from "empty".
+    assign ring_full = wr_frozen;
 
     wire do_write = clkena && (busstate == 2'b11) && !nWr
                     && !wr_frozen;   // stop at exactly 4096 ops: the screen
                                      // hash is then a fixed, predictable value
-
-    wire wr_frozen = wr_count[12];   // 4096 reached
 
     // Byte writes mirror the byte onto both bus halves; only the addressed
     // lane is architectural, so hash and ring see lane-MASKED data or the
@@ -163,11 +210,13 @@ module rf_cpu_spike
     //   h = rotl1(h) + addr[15:0]
     //   h = rotl1(h) + {addr[23:16], 6'b0, UDS, LDS}
     //   h = rotl1(h) + data
-    function automatic logic [31:0] fold(input logic [31:0] h, input logic [15:0] w);
-        logic [31:0] r;
-        r = {h[30:0], h[31]};
-        fold = r + {16'd0, w};
-    endfunction
+    // Written as explicit wires, not a function: Quartus 17.0's quartus_map
+    // crashes outright ("ended unexpectedly") elaborating nested automatic
+    // function calls here. Same toolchain family as the known "cannot index
+    // a function call" limitation.
+    wire [31:0] f0 = {wr_hash[30:0], wr_hash[31]} + {16'd0, a[15:0]};
+    wire [31:0] f1 = {f0[30:0], f0[31]} + {16'd0, a[23:16], 6'd0, ~nUDS, ~nLDS};
+    wire [31:0] f2 = {f1[30:0], f1[31]} + {16'd0, wdat};
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -175,16 +224,19 @@ module rf_cpu_spike
             wr_hash  <= 32'd0;
             ring_wptr<= 12'd0;
         end else if (do_write) begin
-            ring[ring_wptr] <= {~nUDS, ~nLDS, a[23:1], 15'd0, wdat};
             ring_wptr <= ring_wptr + 12'd1;
             wr_count  <= wr_count + 32'd1;
-            wr_hash   <= fold(fold(fold(wr_hash, a[15:0]),
-                                   {a[23:16], 6'd0, ~nUDS, ~nLDS}),
-                              wdat);
+            wr_hash   <= f2;
         end
     end
 
-    always_ff @(posedge clk) ring_rdata <= ring[ring_raddr];
+    rf_bram #(.WIDTH(56), .AW(12)) u_ring (
+        .clk(clk),
+        .waddr(ring_wptr),
+        .wdata({~nUDS, ~nLDS, a[23:1], 15'd0, wdat}),
+        .wren(do_write),
+        .raddr(ring_raddr), .q(ring_rdata)
+    );
 
     // ---- fetch monitor ---------------------------------------------------
     always_ff @(posedge clk) begin

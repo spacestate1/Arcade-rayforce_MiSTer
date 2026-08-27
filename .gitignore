@@ -8,3 +8,14 @@ output_files/
 db/
 incremental_db/
 *.log
+
+# local tooling
+.venv/
+screenshots/
+__pycache__/
+
+# MAME video oracle: VRAM dumps, gfx region dumps and reference frames.
+# Regenerate with tools/oracle_f3dump.lua -- see ROADMAP Phase 2.
+dump/
+snap/
+rtl/rf_build_stamp.vh

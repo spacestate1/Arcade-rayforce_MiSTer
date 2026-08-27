@@ -116,4 +116,20 @@ ensoniq    8 MB   region, 4 MB populated (2x 2MB)
 2. Lua oracle: dump 68020 PC + bus writes per frame (port of
    oracle_copwr.lua technique).
 3. Paper BRAM budget for the video chain.
+
+## Phase 0 results (2026-08-25)
+
+**CPU spike: VALIDATED.** TG68K.C in 020 mode runs the real boot ROM and
+produces the identical architectural write stream as MAME for the first 4096
+writes. The write hash `0x10620931` matches `tools/rf_write_compare.py`
+exactly. The project can proceed.
+
+**Build**: the Quartus 17.0 `quartus_map` crash from inferred byte-sliced
+arrays is fixed by explicit `altsyncram` instances (the Propcycle `pc_bram`
+pattern). The build passes with a timing warning (slack -1.683 ns, Fmax
+~49 MHz vs target 53.372 MHz) — the TG68K 020-mode critical path is known
+and will be addressed in Phase 1.
+
+**Deployment**: the core loads via `/dev/MiSTer_cmd` and shows the diagnostic
+screen on hardware. See `HANDOFF.md` for the build/deploy/validate commands.
 ```

@@ -17,6 +17,7 @@ module rf_uart_dump
     input  logic        reset,
 
     input  logic [11:0] ring_wptr,    // entries valid: 0 .. ring_wptr-1
+    input  logic        ring_full,    // wptr wrapped: ALL 4096 entries valid
     output logic [11:0] ring_raddr,
     input  logic [55:0] ring_rdata,   // {UDS, LDS, addr[23:1], pad, data[15:0]}
     input  logic [31:0] wr_hash,
@@ -102,7 +103,7 @@ module rf_uart_dump
                 0:      ch = "W";
                 1:      ch = " ";
                 2,3,4,5,6,7:
-                        ch = hexc(e_addr[4*(7-pos)+2 +: 4]);
+                        ch = hexc(e_addr[4*(7-pos) +: 4]);
                 8:      ch = " ";
                 9,10,11,12:
                         ch = hexc(e_data[4*(12-pos) +: 4]);
@@ -132,7 +133,7 @@ module rf_uart_dump
                     pos <= '0;
                     if (line_kind == L_HDR) begin
                         idx       <= '0;
-                        line_kind <= (ring_wptr == 0) ? L_HDR : L_ENTRY;
+                        line_kind <= (ring_wptr == 0 && !ring_full) ? L_HDR : L_ENTRY;
                     end else if (idx == ring_wptr - 12'd1) begin
                         line_kind <= L_HDR;
                     end else begin

@@ -17,7 +17,7 @@ set_global_assignment -name LAST_QUARTUS_VERSION "17.0.0 Lite Edition"
 
 set_global_assignment -name GENERATE_RBF_FILE ON
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
-set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
+set_global_assignment -name NUM_PARALLEL_PROCESSORS 10
 set_global_assignment -name SAVE_DISK_SPACE OFF
 set_global_assignment -name SMART_RECOMPILE ON
 set_global_assignment -name MIN_CORE_JUNCTION_TEMP "-40"
@@ -48,7 +48,8 @@ set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
-set_global_assignment -name SEED 8
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+set_global_assignment -name SEED 3
 
 set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
@@ -298,5 +299,17 @@ set_global_assignment -name QIP_FILE rtl/pll.qip
 set_global_assignment -name VHDL_FILE rtl/tg68k/TG68K_Pack.vhd
 set_global_assignment -name VHDL_FILE rtl/tg68k/TG68K_ALU.vhd
 set_global_assignment -name VHDL_FILE rtl/tg68k/TG68KdotC_Kernel.vhd
-set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_cpu_spike.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_bram.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_bram_be.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_bram_dc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_bram_tdp.sv
+set_global_assignment -name SEARCH_PATH rtl
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_selftest_page.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_font8x8.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_selftest.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_uart_log.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_main.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_eeprom_93c46.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_prog_bus.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_sdram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_uart_dump.sv
