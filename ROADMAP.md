@@ -140,19 +140,26 @@ Two findings the RTL has to honour:
 
 **Sub-tasks, in order**
 
-1. - [ ] SDRAM gfx **read** path on ch1/ch2 for `tilemap` + `tilemap_hi`,
-         with a tile-line cache. Read-only and line-cached, i.e. the same
-         shape as the proven `rf_prog_bus` -- not the same risk class as
-         moving main RAM.
+1. - [x] SDRAM gfx **read** path -- `rtl/rf_gfx_bus.sv`. One 16-pixel 6bpp
+         tile row per request, both planes fetched in parallel on two
+         channels (the board reads them in parallel too; MAME's tile_decode
+         merge pass is an emulator convenience, not hardware). A row of low
+         data is exactly one aligned 4-word burst, so nothing is discarded.
+         CDC copied from `rf_prog_bus`, which is proven on hardware.
+         **584/584 tile rows verified in Verilator against `f3_gfx.py`**
+         (`make -C sim gfx`), including 200 pseudo-random codes across the
+         whole 16384-tile space. 11-12 cpu clocks per fetch, so a full line
+         of four playfields costs ~1000 of the 3456 clocks available.
 2. - [ ] `rf_video_line.sv` + `rf_video_pf.sv` + `rf_video_mix.sv`. This is
          the big one: per-line scroll, rowscroll, colscroll, zoom, clipping,
          priority sort and the blending circuit.
 3. - [ ] `rf_video_pivot.sv` -- text/pixel layer. Needs no SDRAM at all;
          char RAM and pivot RAM are already BRAM with a port B waiting.
-4. - [ ] Verilator bench: load a VRAM dump into the RTL, render, diff against
-         the same frame the Python model is checked against. `F3_ONLY=` in
-         f3_render.py renders a matching layer subset, so a half-built
-         renderer can be compared before it is finished.
+4. - [~] Verilator bench -- `sim/`, started. `make -C sim gfx` covers the
+         tile fetch; extend it to load a VRAM dump into the renderer and diff
+         whole frames against the model. `F3_ONLY=` in f3_render.py renders a
+         matching layer subset, so a half-built renderer can be compared
+         before it is finished.
 5. - [ ] `rf_video_spr.sv` -- per-line bucket pre-pass, active set, line
          buffer. No framebuffer: see the measurement below.
 

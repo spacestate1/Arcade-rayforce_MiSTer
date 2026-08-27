@@ -308,6 +308,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_selftest_page.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_font8x8.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_selftest.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_uart_log.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_gfx_bus.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_main.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_eeprom_93c46.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_prog_bus.sv
