@@ -24,9 +24,19 @@
 //      DO is high when idle/ready, which is what the ready poll after a
 //      write looks for.
 //
-//  Contents are volatile here -- there is no save-to-SD path yet, so the
-//  array powers up erased (0xFFFF) and the game writes its defaults. Hooking
-//  this to hps_io's nvram channel is a Phase 4 item.
+//  NVRAM (2026-08-28): the array is loaded from and saved to MiSTer's
+//  config/nvram/<mra>.nvm through hps_io's ioctl channel on index 254 (the
+//  MRA's <nvram index="254" size="128"/>). Two ports for that:
+//
+//    ld_wr / ld_addr / ld_data   the load, during the download
+//    sv_addr -> sv_data          the save, read back word by word
+//    wrote                       a pulse whenever the GAME changes a word,
+//                                which is what asks MiSTer for a save
+//
+//  The array is NOT cleared on reset any more. It could not be: the load
+//  arrives while the core is held in reset by the download, so a reset
+//  clear would wipe exactly the data being loaded. It powers up erased
+//  (the initial block) and MiSTer's default file is FF FF anyway.
 //============================================================================
 
 module rf_eeprom_93c46
@@ -37,10 +47,23 @@ module rf_eeprom_93c46
     input  logic        cs,
     input  logic        sk,          // clock, sampled for a rising edge here
     input  logic        di,
-    output logic        do_out
-);
+    output logic        do_out,
 
-    logic [15:0] mem [0:63];
+    // ---- NVRAM (hps_io ioctl index 254) ---------------------------------
+    input  logic        ld_wr,       // load: one word from the download
+    input  logic  [5:0] ld_addr,
+    input  logic [15:0] ld_data,
+    input  logic  [5:0] sv_addr,     // save: read back for the upload
+    output logic [15:0] sv_data,
+    output logic        wrote        // the game changed a word (pulse)
+);
+    assign sv_data = mem[sv_addr];
+
+    /* verilator lint_off IMPLICITSTATIC */
+    // Power-on value, once. The narrow documented exception (as in
+    // rf_sdram.sv): there is no reset clear -- see the header.
+    logic [15:0] mem [0:63] = '{default: 16'hFFFF};
+    /* verilator lint_on IMPLICITSTATIC */
     logic [15:0] sr;                 // shift register, command then data
     logic  [5:0] bitcnt;
     logic        wen;                // set by EWEN, cleared by EWDS
@@ -71,15 +94,15 @@ module rf_eeprom_93c46
     integer i;
 
     always_ff @(posedge clk) begin
-        cs_d <= cs;
-        sk_d <= sk;
+        cs_d  <= cs;
+        sk_d  <= sk;
+        wrote <= 1'b0;
 
         if (reset) begin
             bitcnt       <= 6'd0;
             wen          <= 1'b0;
             have_cmd     <= 1'b0;
             shifting_out <= 1'b0;
-            for (i = 0; i < 64; i = i + 1) mem[i] <= 16'hFFFF;
         end else begin
             if (!cs) begin
                 // deselect ends whatever was in flight
@@ -116,13 +139,18 @@ module rf_eeprom_93c46
                                         shifting_out <= 1'b1;
                                     end
                                     2'b11: begin                 // ERASE
-                                        if (wen) mem[cmd_w[5:0]] <= 16'hFFFF;
+                                        if (wen) begin
+                                            mem[cmd_w[5:0]] <= 16'hFFFF;
+                                            wrote <= 1'b1;
+                                        end
                                     end
                                     2'b00: case (cmd_w[5:4])     // control group
                                         2'b00: wen <= 1'b0;      // EWDS
                                         2'b11: wen <= 1'b1;      // EWEN
-                                        2'b10: if (wen)          // ERAL
+                                        2'b10: if (wen) begin    // ERAL
                                             for (i = 0; i < 64; i = i + 1) mem[i] <= 16'hFFFF;
+                                            wrote <= 1'b1;
+                                        end
                                         default: ;               // WRAL handled on data
                                     endcase
                                     default: ;                   // WRITE: data follows
@@ -135,9 +163,13 @@ module rf_eeprom_93c46
                         bitcnt <= bitcnt + 6'd1;
                         if (bitcnt == 6'd15) begin
                             if (wen) begin
-                                if (cmd_op == 2'b01) mem[cmd_addr] <= data_w;
-                                else if (cmd_op == 2'b00 && cmd_addr[5:4] == 2'b01)
+                                if (cmd_op == 2'b01) begin
+                                    mem[cmd_addr] <= data_w;
+                                    wrote <= 1'b1;
+                                end else if (cmd_op == 2'b00 && cmd_addr[5:4] == 2'b01) begin
                                     for (i = 0; i < 64; i = i + 1) mem[i] <= data_w;
+                                    wrote <= 1'b1;
+                                end
                             end
                             bitcnt   <= 6'd0;
                             have_cmd <= 1'b0;
@@ -146,6 +178,11 @@ module rf_eeprom_93c46
                 end
             end
         end
+
+        // The NVRAM load, last in the process so it wins: it only happens
+        // while the core is held in reset by the download, when nothing
+        // else drives the array.
+        if (ld_wr) mem[ld_addr] <= ld_data;
     end
 
 endmodule

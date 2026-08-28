@@ -301,10 +301,42 @@ module rf_video_spr
         .ch_hi_addr(ch_b_hi_addr), .ch_hi_dout(ch_b_hi_dout), .ch_hi_req(ch_b_hi_req), .ch_hi_ready(ch_b_hi_ready)
     );
 
-    // ---- line buffer ring: NB banks x 320 x {line[7:1], val[12:0]} -------
-    // Bank = line mod NB. The tag that tells a stale entry from this line's
-    // is line[7:1] -- it differs from any other line sharing the bank while
-    // NB <= 128 -- so an entry is 20 bits and NB x 512 x 20 bits is NB/2
+    // ---- line buffer ring: NB banks x 320 x {tag[6:0], val[12:0]} -------
+    // Bank = line mod NB, so every line sharing a bank has the same
+    // line[NBW-1:0] and is told apart by line[7:NBW]. The tag is that plus
+    // the FRAME PARITY:
+    //
+    //     tag = {par, line[7:NBW]}
+    //
+    // The parity is the cheap half of the fix for the ghosting reported from
+    // the cabinet on 2026-08-28 (player shots leaving their pixels behind
+    // along the whole path). The original claim that "the line buffer needs
+    // no clearing" was wrong: an entry is only ever overwritten by another
+    // sprite pixel at the same address, so a pixel written at (line L, x)
+    // still carried a matching tag at (line L, x) in the NEXT frame and read
+    // as a live sprite pixel until something happened to overwrite it.
+    //
+    // The parity alone is NOT enough -- it only tells adjacent frames apart,
+    // so a pixel untouched for two frames comes back (sim/Makefile
+    // `spr-ghost` failed exactly that way with the parity and no clear). The
+    // buffer is therefore CLEARED per line, in D_CLR below, which is what
+    // the real chip's framebuffer does (the model clears it every frame;
+    // "sprite trails" is the F3 feature for not clearing, and Ray Force
+    // never sets it). The tag then costs nothing and still guards the window
+    // where the draw has not reached a line the mixer asks for.
+    //
+    // The clear is a SPAN, not the whole 320: each bank remembers the
+    // leftmost and rightmost pixel its last occupant wrote, and only that
+    // range is cleared before the next line uses it. Every pixel any
+    // occupant wrote is therefore cleared before the next one draws, which
+    // is the whole requirement -- and a flat 320-pixel clear was far too
+    // expensive: it pushed the longest line from 3288 to 3608 clocks and
+    // made 254 of 256 lines late in `pipe-lat` (the pathological frame at
+    // hardware-like SDRAM latency). The span costs nothing on the empty and
+    // near-empty lines that most of a frame is made of.
+    //
+    // It costs no memory: line[7:NBW] is 6 bits for NB = 4, so the tag is
+    // still 7 bits and an entry still 20, i.e. NB x 512 x 20 bits = NB/2
     // M10Ks (2 banks were three M10Ks at 21 bits).
     localparam int NB  = 4;
     localparam int NBW = $clog2(NB);
@@ -318,7 +350,13 @@ module rf_video_spr
         .waddr(wr_addr), .wdata(wr_data), .wren(wr_en),
         .raddr({rd_line[NBW-1:0], rd_x}), .q(lb_q)
     );
-    assign rd_color = (lb_q[19:13] == rd_line[7:1]) ? {3'd0, lb_q[12:0]} : 16'd0;
+    // the parity of the frame being drawn; the mixer reads the line the draw
+    // wrote in this same frame (the draw runs ahead of it, never behind), and
+    // the only window where the two disagree -- frame_start to the mixer's
+    // line 0, raster 260-261 -- has no mixing in it
+    logic par;
+    wire [6:0] rd_tag = {par, rd_line[7:NBW]};
+    assign rd_color = (lb_q[19:13] == rd_tag) ? {3'd0, lb_q[12:0]} : 16'd0;
 
     logic [3:0] used_bank [0:NB-1];
     assign rd_used = used_bank[rd_line[NBW-1:0]];
@@ -495,9 +533,15 @@ module rf_video_spr
     // current record is drawn (or there is none), take the consume slot as
     // soon as its pixels are in. Done: nothing drawing, nothing in flight,
     // no records left.
-    typedef enum logic [1:0] { D_IDLE, D_LEAD0, D_RUN, D_DONE } dst_t;
+    typedef enum logic [2:0] { D_IDLE, D_CLR, D_LEAD0, D_RUN, D_DONE } dst_t;
     dst_t dst;
     assign line_busy = (dst != D_IDLE && dst != D_DONE);
+    // the clear span: what the bank's last occupant wrote, and what this
+    // line is writing (lo > hi means nothing)
+    logic [8:0] clr_x, clr_hi;
+    logic [8:0] span_lo [0:NB-1];
+    logic [8:0] span_hi [0:NB-1];
+    logic [8:0] cur_lo, cur_hi;
 
     always_ff @(posedge clk) begin
         gfx_req <= 2'b00;
@@ -510,8 +554,13 @@ module rf_video_spr
 
         if (reset) begin
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
-            active <= 1'b0; nxt <= 9'd0;
+            active <= 1'b0; nxt <= 9'd0; par <= 1'b0;
+            for (int b = 0; b < NB; b++) begin
+                span_lo[b] <= 9'd511; span_hi[b] <= 9'd0;      // empty
+            end
         end else if (frame_start) begin
+            par <= ~par;                // every entry of the frame just drawn
+                                        // now reads as empty
             // the buckets just swapped: restart at line 0. In normal running
             // the draw finished line 255 long ago; a fetch still in flight
             // (a frame_start mid-line, e.g. the bench's priming pass) is
@@ -526,13 +575,31 @@ module rf_video_spr
                 q_busy  <= 2'b00; q_ready <= 2'b00;
                 q_is    <= 1'b0;  q_cs    <= 1'b0;
                 cur     <= 1'b0;
-                dst <= D_LEAD0;
+                clr_x   <= span_lo[nxt[NBW-1:0]];
+                clr_hi  <= span_hi[nxt[NBW-1:0]];
+                cur_lo  <= 9'd511; cur_hi <= 9'd0;             // this line: empty
+                dst <= (span_lo[nxt[NBW-1:0]] > span_hi[nxt[NBW-1:0]]) ? D_LEAD0 : D_CLR;
+            end
+
+            // Clear this line's bank: 320 writes, ~9 % of the frame's clocks
+            // and the reason a sprite goes away when it stops being drawn.
+            // The run table's answer for {rb, nxt} is presented from D_IDLE
+            // and nxt does not move until D_DONE, so bt_q is still valid at
+            // the end of this.
+            D_CLR: begin
+                wr_en   <= 1'b1;
+                wr_addr <= {dr_line[NBW-1:0], clr_x};
+                wr_data <= 20'd0;
+                clr_x   <= clr_x + 9'd1;
+                if (clr_x >= clr_hi) dst <= D_LEAD0;
             end
 
             // the run table answers for {rb, nxt} (presented during D_IDLE)
             D_LEAD0: begin
                 if (bt_q[RW-1:0] == bt_q[2*RW-1:RW]) begin
                     used_bank[dr_line[NBW-1:0]] <= dr_used;     // empty line
+                    span_lo[dr_line[NBW-1:0]] <= cur_lo;        // nothing written
+                    span_hi[dr_line[NBW-1:0]] <= cur_hi;
                     dst <= D_DONE;
                 end else begin
                     fc    <= bt_q[RW-1:0];
@@ -575,6 +642,8 @@ module rf_video_spr
                         cur  <= 1'b1;
                     end else if (!q_busy[q_cs] && fc == fe) begin
                         used_bank[dr_line[NBW-1:0]] <= dr_used;
+                        span_lo[dr_line[NBW-1:0]] <= cur_lo;
+                        span_hi[dr_line[NBW-1:0]] <= cur_hi;
                         dst <= D_DONE;
                     end
                     // else wait for the oldest fetch to land
@@ -582,8 +651,10 @@ module rf_video_spr
                     if (dr_vis && dr_pen != 5'd0) begin
                         wr_en   <= 1'b1;
                         wr_addr <= {dr_line[NBW-1:0], dr_ix};
-                        wr_data <= {dr_line[7:1], dr_base | {8'd0, dr_pen}};
+                        wr_data <= {par, dr_line[7:NBW], dr_base | {8'd0, dr_pen}};
                         dr_used <= dr_used | (4'd1 << dr_pri);
+                        if (dr_ix < cur_lo) cur_lo <= dr_ix;
+                        if (dr_ix > cur_hi) cur_hi <= dr_ix;
                     end
                     dr_dx8 <= dr_dx8 + $signed({16'd0, dr_sx});
                     dr_xx  <= dr_xx + 5'd1;

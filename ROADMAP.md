@@ -442,10 +442,10 @@ stereo, MAME's mix) are the references.
 - [ ] Full memory map decode (`rf_main.sv`)
 - [ ] Interrupt controller (vblank, timer)
 - [ ] Input handling (joystick, buttons)
-- [ ] NVRAM (EEPROM save/load)
+- [x] NVRAM (EEPROM save/load) -- 2026-08-28 B14: MRA `<nvram index="254" size="128"/>`, load on ioctl 254 after the ROMs, save on ioctl_upload_req when the game writes the 93C46 (F3 has no DIP switches: every setting is in the service menu and this EEPROM)
 
 **Software**
-- [ ] Update MRA for all region variants (gunlock, rayforce, rayforcej)
+- [x] Update MRA for all region variants (gunlock, rayforce, rayforcej) -- written, Gunlock/Japan not yet loaded on the board
 - [ ] Self-test page (port from Raiden II `raiden2_diag/selftest`)
 - [ ] UART debug streaming (port from Raiden II)
 

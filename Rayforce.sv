@@ -223,6 +223,7 @@ wire [21:0] gamma_bus;
 
 wire        ioctl_download;
 wire        ioctl_wr;
+wire        ioctl_upload, ioctl_rd;
 wire [26:0] ioctl_addr;
 wire [15:0] ioctl_dout;
 wire  [7:0] ioctl_index;
@@ -231,6 +232,7 @@ wire        ioctl_wait;
 wire [31:0] joystick_0;
 wire [31:0] joystick_1;
 wire [15:0] joystick_l_analog_0, joystick_l_analog_1;   // Y[15:8], X[7:0], -127..127
+wire [15:0] nv_din;                                     // NVRAM readback to hps_io
 
 hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 (
@@ -251,6 +253,14 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
     .ioctl_dout(ioctl_dout),
     .ioctl_index(ioctl_index),
     .ioctl_wait(ioctl_wait),
+
+    // NVRAM save: the core asks (nv_save_req), MiSTer reads the 128 bytes
+    // back on index 254 and writes config/nvram/<mra>.nvm
+    .ioctl_upload(ioctl_upload),
+    .ioctl_upload_req(nv_save_req),
+    .ioctl_upload_index(8'd254),
+    .ioctl_din(nv_din),
+    .ioctl_rd(ioctl_rd),
 
     .joystick_0(joystick_0),
     .joystick_1(joystick_1),
@@ -574,6 +584,38 @@ logic        aud_ring_we, aud_armed;
 logic [22:0] aud_idx;
 logic [55:0] aud_ring_data;
 
+// ---------------------------  NVRAM  ---------------------------------
+//
+// The 93C46 settings EEPROM is the game's only persistent store: the
+// service-menu settings (and the "bad settings" boot path) live in it, so
+// without this every boot starts from defaults. The MRA declares
+// <nvram index="254" size="128"/>; MiSTer sends those 128 bytes on ioctl
+// index 254 AFTER the ROM regions (the file if it exists, else the MRA's
+// default), and reads them back the same way when the core raises
+// ioctl_upload_req and the user opens the OSD or picks "Save settings"
+// (Main_MiSTer menu.cpp: arcade_nvm_save on MENU_SAVE_CHECK).
+//
+// 64 words, big-endian in the file: the loader's 16-bit word arrives
+// little-endian, so both directions swap the lanes.
+wire        nv_wr = ioctl_wr && (ioctl_index == 8'd254);
+wire  [5:0] nv_addr = ioctl_addr[6:1];
+wire [15:0] nv_data = {ioctl_dout[7:0], ioctl_dout[15:8]};
+wire [15:0] nv_sv_data;
+wire        nv_wrote;
+assign      nv_din  = {nv_sv_data[7:0], nv_sv_data[15:8]};
+
+// Ask for a save once the game has changed a word, and stay asking until
+// MiSTer has taken it: hps_io latches the RISING edge, so the request is
+// dropped when the upload finishes and a later write raises it again.
+logic nv_save_req;
+logic ioctl_upload_d;
+always_ff @(posedge clk_sys) begin
+    ioctl_upload_d <= ioctl_upload;
+    if (reset) nv_save_req <= 1'b0;
+    else if (nv_wrote) nv_save_req <= 1'b1;
+    else if (ioctl_upload_d && !ioctl_upload) nv_save_req <= 1'b0;
+end
+
 rf_main main
 (
     .clk(clk_sys),
@@ -585,6 +627,8 @@ rf_main main
     .j0(joy0_in), .j1(joy1_in),
     .pause(paused),
     .test_sw(status[2]),
+    .nv_wr(nv_wr), .nv_addr(nv_addr), .nv_data(nv_data),
+    .nv_sv_addr(ioctl_addr[6:1]), .nv_sv_data(nv_sv_data), .nv_wrote(nv_wrote),
 
     .ctrl0(vctrl0), .ctrl1(vctrl1),
 

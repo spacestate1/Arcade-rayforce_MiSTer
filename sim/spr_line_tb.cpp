@@ -5,7 +5,12 @@
 //  (walk + expand), then builds each screen line and compares its line buffer
 //  and row-usage against the model's framebuffer (sim/gen_spr_fb_ref.py).
 //
-//    ./obj_dir/sprlinetb <dump_dir> <frame> <ref>
+//    ./obj_dir/sprlinetb <dump_dir> <frame> <ref> [frame2] [ref2]
+//
+//  With frame2/ref2 it then swaps in THAT frame's sprite RAM and checks the
+//  same way. That is the ghost regression: the line buffer is never cleared,
+//  so a frame whose sprites moved or went away must not show the previous
+//  frame's pixels. Run it with a busy frame followed by a near-empty one.
 //============================================================================
 #include "Vrf_video_spr.h"
 #include "verilated.h"
@@ -117,6 +122,20 @@ int main(int argc, char** argv) {
     }
 
     int bad = 0, ubad = 0, shown = 0;
+    auto load_ref = [&](const char* path) {
+        for (auto& v : fb) v.clear();
+        std::fill(used.begin(), used.end(), 0);
+        FILE* f = fopen(path, "r"); if (!f) { fprintf(stderr, "cannot open %s\n", path); exit(2); }
+        char* ln = nullptr; size_t cap = 0;
+        while (getline(&ln, &cap, f) > 0) {
+            if (ln[0] == '#') continue;
+            std::istringstream ss(ln); std::string tag; int sy, u;
+            ss >> tag >> sy >> u; used[sy] = u; int v;
+            while (ss >> v) fb[sy].push_back(v);
+        }
+        free(ln); fclose(f);
+    };
+    auto check = [&](int fno) {
     for (int sy = 0; sy < 256; sy++) {
         // the draw runs ahead on its own, held back by rd_line (the mixer's
         // line): move the mixer to this line and wait until it is drawn
@@ -143,7 +162,34 @@ int main(int argc, char** argv) {
             if (ubad <= 6) printf("  sy=%d used rtl=%x ref=%x\n", sy, t->rd_used & 0xF, used[sy] & 0xF);
         }
     }
-    printf("frame %d: %d pixel diffs, %d used-flag diffs (%lld cyc)\n", frame, bad, ubad, cyc);
+    printf("frame %d: %d pixel diffs, %d used-flag diffs (%lld cyc)\n", fno, bad, ubad, cyc);
+    };
+    check(frame);
+
+    // ---- second frame: the ghost regression -----------------------------
+    if (argc > 5) {
+        int frame2 = atoi(argv[4]);
+        char pre2[64]; snprintf(pre2, sizeof pre2, "/f3_%05d_spriteram.bin", frame2 - 2);
+        { auto b = load(dir + pre2); sram.assign(b.size() / 2, 0);
+          for (size_t i = 0; i < sram.size(); i++) sram[i] = (b[2 * i] << 8) | b[2 * i + 1]; }
+        load_ref(argv[5]);
+        // two prepass cycles: the first builds the new list into the write
+        // bank (the draw still has the old one), the second publishes it
+        t->rd_line = 0;
+        for (int c = 0; c < 2; c++) {
+            t->frame_start = 1; step(); t->frame_start = 0;
+            long g = 0; while (t->prepass_busy && g++ < 20000000) step();
+            long gd = 0; while (t->lines_done < 256 && gd++ < 20000000) { t->rd_line = 255; step(); }
+            t->rd_line = 0;
+            for (int i = 0; i < 4; i++) step();
+        }
+        int before = bad;
+        check(frame2);
+        if (bad > before)
+            printf("  (frame %d after frame %d: %d wrong pixels -- stale sprite pixels from the\n"
+                   "   previous frame, i.e. the line buffer's tag does not distinguish frames)\n",
+                   frame2, frame, bad - before);
+    }
     if (!bad && !ubad) printf("SPRITE LINES OK\n");
     delete t;
     return (bad || ubad) ? 1 : 0;

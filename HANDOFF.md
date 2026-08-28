@@ -98,7 +98,75 @@ committed (no commit was asked for -- the tree is left ready to review).
 | B12 | Audio Ring index absolute (samples since the sound CPU's release); sound CPU honours Pause | page | **28084316: every page row PASS, HDMI PLL -0.042 ns (fitter variance), core clocks +1.7/+1.8 ns.** Deployed 09:22 by session b2 after session 5a was stopped. The full bench suite (12 targets) passes on this tree |
 | B13 | **The fix for the scrambled sound: ES5505 register READS** (`rf_es5505.sv` rd_* port, `rf_sound_main.sv` stalls the 68000 until the answer), plus the left analog stick as d-pad (`Rayforce.sv` stick_dirs) | `make -C sim es5505-rw`: 1.15 M samples exact AND all 8001 of the driver's reads answered as MAME does; `make es5505` (en3) still exact; lint | **28094310, GATE PASS (HDMI PLL -0.158 ns, the framework clock's fitter variance again; core clocks +1.35/+1.82 ns), ALMs 87 %. Every page row PASS. Audio Ring: index 803387 (26.99 s after the release), NCC +1.000 at ratio 1.000 against BOTH `model95.wav` and MAME's `en_mix.wav` at 28.850 s -- the board's audio is MAME's.** Capture kept as `dump/en5/audio_ring_b13.log`. The analog stick is untested (no pad on the bench) |
 | B8 | Sampler shrunk for margin: the write queue read through one port (an `A_NXT` state instead of a second read port), the record update done field by field instead of rebuilding 313 bits per case arm | `make -C sim es5505` exact (1.15 M samples) | **28005854: TIMING MET on every clock** (HDMI +0.19, clk_ram +1.46, clk_sys +1.96 ns), ALMs 86 % (B7: 96 %), sampler 1805 ALMs (B7: 5381), M10K 539. On the board, every page row PASS (`SND ES WR : RUN C27A0001`, `SPR REC : DROP 0E800000`, `SPRLINE : LATE 06610000`). **This is the core on the board, in page mode, and in `builds/`** |
+| B14 | The sprite ghost (per-line span clear + frame-parity tag), NVRAM load/save on ioctl 254, the two sprite rows peak-held | `make -C sim spr-ghost` (frame 3000 then 300: 1280 stale pixels before, 0 after), all 12 benches, `pipe-lat` 0 late lines, lint | *(building, stamp 28105535)* |
 | P | Small missing parts: Pause (in B4), gunlock/rayforcej MRAs (written), NVRAM (design note only) | build + board | Pause + MRAs done; NVRAM see "Missing parts" |
+
+### Sprites that never went away, and NVRAM (2026-08-28, B14 `28105535`)
+
+**The ghost.** Reported from the cabinet: player shots leave their pixels on
+the screen along the whole path. The cause is in `rf_video_spr.sv`, and the
+comment that hid it said "the line buffer needs no clearing: each entry tags
+the line it was written for". It tagged the LINE but not the FRAME. Bank =
+line mod 4, tag = line[7:1]; within a frame that tells the 64 lines sharing
+a bank apart, but line L of the next frame has the same bank AND the same
+tag, so a pixel written at (L, x) and not overwritten by anything since
+still read as a live sprite pixel, frame after frame. Nothing ever cleared
+it -- only another sprite pixel at the same address could.
+
+The fix is what the real chip does (and the model: it clears its
+framebuffer every frame -- "sprite trails" is the F3 feature for NOT
+clearing, and Ray Force never sets it): **clear the line before drawing
+it**. Two details earned by measurement:
+
+- A frame-parity bit in the tag (free: `{par, line[7:NBW]}` is still 7
+  bits) is NOT sufficient on its own -- one bit only tells adjacent frames
+  apart, and a pixel untouched for two frames comes back. `sim/Makefile
+  spr-ghost` -- frame 3000 (198 sprites) followed by frame 300 -- failed
+  with 1280 stale pixels on exactly that. It is kept as a guard for the
+  window where the draw has not reached a line the mixer asks for.
+- A flat 320-pixel clear per line is too expensive: it took the longest
+  line from 3288 to 3608 clocks and made 254 of 256 lines late in
+  `pipe-lat`. The clear is therefore a **span**: each bank remembers the
+  leftmost and rightmost pixel its last occupant wrote and only that range
+  is cleared. Every written pixel is still cleared before the next occupant
+  draws -- full correctness, not just adjacent frames -- and the empty and
+  near-empty lines that most of a frame is made of cost nothing. Measured
+  after: longest line 3472/4726 clocks, **0 late lines**, all 12 benches
+  identical.
+
+**The two sprite rows are now PEAK HOLD.** A five-minute attract capture
+(632 page passes) showed record drops in ONE pass and late lines in two,
+which a last-frame value misses by design. `SPR REC : DROP` now reads
+{highest records built, total rows dropped} and `SPRLINE : LATE` {longest
+line draw, total late lines}, held since reset -- so a boss transition
+cannot slip past between two UART samples. Held only from the 16th frame:
+the first frames after a reset have no buckets built yet, so the mixer
+legitimately outruns the draw and the counter would latch a permanent FAIL
+out of the boot.
+
+**NVRAM.** The 93C46 settings EEPROM now loads and saves through MiSTer's
+ioctl index 254. The MRAs declare `<nvram index="254" size="128"/>` (the
+form Main_MiSTer's `mra_loader.cpp` parses: `nvram_idx` from index,
+`nvram_size` from size); Main sends the 128 bytes after the ROM regions,
+from `config/nvram/<mra>.nvm` if it exists and the MRA's default
+otherwise, and reads them back when the core raises `ioctl_upload_req` and
+the user opens the OSD or picks "Save settings" (`menu.cpp`:
+`arcade_nvm_save` on `MENU_SAVE_CHECK`, and on the Save settings item).
+`rf_eeprom_93c46` gained a load port, a readback port and a `wrote` pulse;
+the top level holds the save request from the first game write until the
+upload finishes, so a later write asks again. **The array is no longer
+cleared on reset** -- it could not be: the load arrives while the core is
+held in reset by the download, so a reset clear would wipe exactly the
+data being loaded. It powers up erased instead.
+
+**On "DIP switches in the OSD": the F3 board has none.** There is no DIP
+bank on the PCB and none in `taito_f3.cpp`; every setting (difficulty,
+lives, region notice, free play, the sound test) lives in the game's own
+service menu, reached with the cabinet TEST switch -- which is the OSD's
+**Service Mode** toggle -- and is stored in the 93C46. So the OSD entry
+that makes those settings reachable is already there, and NVRAM is what
+makes them stick between sessions; there is nothing further to add without
+inventing switches the hardware does not have.
 
 ### The sound bug: ES5505 reads (2026-08-28, session b2)
 

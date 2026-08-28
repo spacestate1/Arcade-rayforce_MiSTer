@@ -256,6 +256,15 @@ module rf_video_pipe
     logic        spr_prepass_busy, spr_line_busy;
     logic  [8:0] spr_lines_done;
     logic [15:0] spr_rec_peak, spr_rec_drop;
+    // peak-hold accumulators for the two sprite rows (see frame_end below)
+    logic [15:0] h_spr_max, h_late, h_rec_max, h_drop;
+    // ...held from the WARM frame on. The first frames after a reset have no
+    // sprite buckets built yet, so the mixer legitimately starts lines the
+    // draw has not reached and the late counter would latch a permanent FAIL
+    // out of the boot (the bench shows exactly 254 such lines in its priming
+    // frame). Eight frames is well past the first real prepass.
+    logic  [3:0] warm;
+    wire         held = (warm == 4'hF);
     logic [15:0] sp_color;
     logic  [3:0] sp_used;
     wire   [8:0] smp_x;
@@ -341,6 +350,7 @@ module rf_video_pipe
             pf_or <= 0; pal_or <= 0;
             t_fet <= 0; t_fet_max <= 0; t_bld <= 0; t_bld_max <= 0;
             t_spr <= 0; t_spr_max <= 0; n_spr_miss <= 0;
+            h_spr_max <= 0; h_late <= 0; h_rec_max <= 0; h_drop <= 0; warm <= 0;
             dbg_lines <= 0; dbg_fetch <= 0; dbg_max <= 0; dbg_nz <= 0; dbg_spr <= 0; dbg_rec <= 0;
         end else begin
             if (mix_busy_d && !mix_busy) n_mix <= n_mix + 16'd1;
@@ -370,8 +380,27 @@ module rf_video_pipe
                 dbg_fetch <= {n_fet, n_pnz};
                 dbg_max   <= {t_fet_max, t_bld_max};
                 dbg_nz    <= {n_tnz, pf_or, pal_or};
-                dbg_spr   <= {t_spr_max, n_spr_miss};
-                dbg_rec   <= {spr_rec_peak, spr_rec_drop};
+                // The two sprite rows are PEAK HOLD, not last-frame: the
+                // events they exist to catch (a boss transition overflowing
+                // the record store, a dense line the mixer starts before the
+                // draw finished it) last a frame or two, and the page is read
+                // by eye or over a UART that samples it once a second -- a
+                // last-frame value misses them. Over a five-minute attract
+                // capture (632 passes) drops appeared in ONE pass and late
+                // lines in two, which is exactly why these are held.
+                if (!held) warm <= warm + 4'd1;
+                if (held && spr_rec_peak > h_rec_max) h_rec_max <= spr_rec_peak;
+                if (held && t_spr_max    > h_spr_max) h_spr_max <= t_spr_max;
+                if (held) begin
+                    h_drop <= (16'hFFFF - h_drop < spr_rec_drop) ? 16'hFFFF : h_drop + spr_rec_drop;
+                    h_late <= (16'hFFFF - h_late < n_spr_miss)   ? 16'hFFFF : h_late + n_spr_miss;
+                end
+                dbg_spr <= held ? {(t_spr_max > h_spr_max) ? t_spr_max : h_spr_max,
+                                   (16'hFFFF - h_late < n_spr_miss) ? 16'hFFFF : h_late + n_spr_miss}
+                                : {t_spr_max, 16'd0};
+                dbg_rec <= held ? {(spr_rec_peak > h_rec_max) ? spr_rec_peak : h_rec_max,
+                                   (16'hFFFF - h_drop < spr_rec_drop) ? 16'hFFFF : h_drop + spr_rec_drop}
+                                : {spr_rec_peak, 16'd0};
                 n_mix <= 0; n_bld <= 0; n_fet <= 0; n_pnz <= 0; n_tnz <= 0;
                 pf_or <= 0; pal_or <= 0;
                 t_fet_max <= 0; t_bld_max <= 0;

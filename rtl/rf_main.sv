@@ -73,6 +73,15 @@ module rf_main
     input  logic [15:0] j1,
     input  logic        test_sw,        // cabinet TEST switch (OSD toggle)
 
+    // ---- NVRAM: the settings EEPROM, loaded from and saved to the SD card
+    // through hps_io's ioctl index 254 (see Rayforce.sv)
+    input  logic        nv_wr,
+    input  logic  [5:0] nv_addr,
+    input  logic [15:0] nv_data,
+    input  logic  [5:0] nv_sv_addr,
+    output logic [15:0] nv_sv_data,
+    output logic        nv_wrote,
+
     // ---- video side ----------------------------------------------------
     // Playfield / pivot / sprite scroll and the 1024x512 "extend" bit.
     // ctrl0 = 0x660000-0F (words 0-7), ctrl1 = 0x660010-1F (words 8-15).
@@ -318,7 +327,9 @@ module rf_main
     rf_eeprom_93c46 eeprom
     (
         .clk(clk), .reset(reset),
-        .cs(ee_cs), .sk(ee_sk), .di(ee_di), .do_out(ee_do)
+        .cs(ee_cs), .sk(ee_sk), .di(ee_di), .do_out(ee_do),
+        .ld_wr(nv_wr), .ld_addr(nv_addr), .ld_data(nv_data),
+        .sv_addr(nv_sv_addr), .sv_data(nv_sv_data), .wrote(nv_wrote)
     );
 
     // EEPROMIN: bit0 EEPROM data out, bit1 TEST switch (active low),

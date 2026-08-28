@@ -28,7 +28,7 @@ VERILATOR ?= verilator
 VFLAGS = -DVERILATOR --cc --exe --build -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 RTL = ../rtl
 
-.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr spr-all spr-line spr-line-all clean
+.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw clean
 
 gfx: obj_dir/gfxtb
 	./obj_dir/gfxtb ../dump fetched.txt
@@ -122,6 +122,15 @@ SPR_RTL = $(RTL)/rf_video_spr_list.sv $(RTL)/rf_spr_gfx_bus.sv $(RTL)/rf_bram.sv
 
 spr-line: obj_dir/sprlinetb spr_fb_ref.txt
 	./obj_dir/sprlinetb ../dump 1800 spr_fb_ref.txt
+
+# ghost regression: a busy frame (3000, 198 sprites) followed by a quiet one
+# (300). The line buffer is never cleared, so frame 300 must show none of
+# frame 3000's pixels -- it did before the frame-parity tag (2026-08-28).
+spr-ghost: obj_dir/sprlinetb spr_fb_ref_3000.txt spr_fb_ref_300.txt
+	./obj_dir/sprlinetb ../dump 3000 spr_fb_ref_3000.txt 300 spr_fb_ref_300.txt
+
+spr_fb_ref_%.txt: gen_spr_fb_ref.py ../tools/f3_render.py
+	python3 gen_spr_fb_ref.py ../dump $* > $@
 
 spr-line-all: obj_dir/sprlinetb
 	@for f in $$(ls ../dump/f3_*_spriteram.bin | sed 's/.*f3_0*\([0-9]*\)_spriteram.bin/\1/'); do \

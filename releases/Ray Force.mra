@@ -77,7 +77,6 @@
     <part name="d66-02.ic3" crc="dcdafaab"/>
   </rom>
 
-  <rom index="254" zip="rayforce.zip|gunlock.zip" type="nvram" md5="None">
-    <part>FF FF</part>
-  </rom>
+  <!-- the 93C46 settings EEPROM: 64 words, saved to config/nvram/<mra>.nvm -->
+  <nvram index="254" size="128"/>
 </misterromdescription>
