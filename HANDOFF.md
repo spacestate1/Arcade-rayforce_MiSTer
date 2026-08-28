@@ -102,6 +102,40 @@ committed (no commit was asked for -- the tree is left ready to review).
 | B15 | Resource work: the 56-bit debug ring 4096 -> 2048 entries (24 -> 12 M10Ks, M10K being the binding resource at 539/553) and the sprite record store 8192 -> 12288 rows per bank in MLABs, which is what the board's measured 8296-row peak overran | benches; the fit report's M10K and memory-LAB counts | **28113056: `GATE PASS: timing met` -- the FIRST fully clean build since B7. Worst slack +0.048 ns; the HDMI PLL clock that had missed by 0.04-0.16 ns in every build from B10 on is met, which says that miss was fitter congestion, not a real path. M10K 527/553 (was 539), ALMs 88 %, block memory 73 %. On the board: every page row PASS; the audio ring (2048 samples now) correlates +0.992 with `model95.wav` at ratio 1.0** |
 | P | Small missing parts: Pause (in B4), gunlock/rayforcej MRAs (written), NVRAM (design note only) | build + board | Pause + MRAs done; NVRAM see "Missing parts" |
 
+### Ray Force overruns its sprite budget in attract -- in the SHIPPED release (2026-08-28)
+
+Found by the peak-hold rows added in B14, and only because a core was left
+running for a couple of minutes instead of being read straight after a load:
+
+    v1.0 release (28124835, its own unpadded MRA, ROM BYTES 00B80000 PASS)
+        SPRLINE : LATE  3EFA182E  FAIL     longest line 16122 clocks,
+                                           6190 late lines and climbing
+
+The budget is 3456 clocks a line. Sixteen thousand is nearly five times it,
+and a "late" line is one the mixer started composing before the sprite draw
+had finished it -- i.e. **missing or partial sprites on those lines**, in
+ordinary attract mode, in the build that was tagged and released.
+
+This is NOT a regression from the F3 generalisation: the same rows on the
+current tree's build (`28165741`) read `42C910A7`, the same story. Both were
+checked with the MRA each bitstream was built for -- the first attempt at
+this comparison ran the release bitstream against the new padded MRA, which
+it cannot read (ROM BYTES failed), and was thrown away.
+
+Why it went unnoticed: every capture in this handoff before now was taken
+within seconds of a core load, when the peak-hold counters are still at
+zero. They climb once attract reaches its busier scenes. `SPR REC : DROP`
+stays clean (0 dropped records), so the record store is fine -- it is the
+per-line DRAW that misses its deadline, which points at the SDRAM fetch
+path under contention rather than at the bucket build.
+
+**This deserves priority over Elevator Action**: it is a visible defect in a
+released, working game, it is measurable from the page without a debugger,
+and `pipe-lat` (the bench that models a hardware-like fetch turnaround)
+reports zero late lines -- so the bench's latency model is optimistic
+compared with the real controller and should be recalibrated against these
+numbers first.
+
 ### Elevator Action Returns: first boot on the core (2026-08-28, `28133520`)
 
 The core is now a Taito F3 core that loads a second game. Build `28133520`
