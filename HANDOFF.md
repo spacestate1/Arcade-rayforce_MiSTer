@@ -169,7 +169,40 @@ mixed-port read-during-write on the BRAMs (changed to OLD_DATA in
 `28142635` -- kept, since it is strictly safer, but the symptoms did not
 move at all).
 
-**The next diagnostic is the main CPU's program counter.** `rf_main` still
+**Answered (build `28150713`, timing met +0.114): the game's own POST
+rejected our RAM.** The new `TRAP : MAIN PC` row reads `0001032C`, trap
+flag 0. Disassembling the reconstructed program ROM there:
+
+```
+0102A0:  MOVE.B D1,(A0) / MOVE.B (A0),D2 / CMP.B D1,D2 / BEQ ok    byte pass
+0102D0:  MOVE.W D1,(A0) / MOVE.W (A0),D2 / CMP.W D1,D2 / BEQ ok    word pass
+010300:  MOVE.L D1,(A0) / MOVE.L (A0),D2 / CMP.L D1,D2 / BEQ ok    long pass
+   mismatch -> LEA (pc+8),A2 ; JMP <error printer>
+010324:  JMP (A6)    010326: BRA.S *      <- hang
+010328:  JMP (A2)    01032A: BRA.S *      <- hang
+01032C:  JMP (A2)    01032E: BRA.S *      <- hang   <-- the board sits HERE
+010332:  "WORK RAM ERROR" "OBJECT RAM ERROR" "SCR0 RAM ERROR" ...
+         "MASK RAM ERROR" "LINE SET RAM ERROR" "LINE DATA RAM ER..."
+```
+
+So the core is not hanging on a missing device and is not lost: Elevator
+Action Returns' power-on self test **compared a byte it had just written,
+found the wrong value, and jumped to its error handler on purpose**. The
+strings sitting immediately after the handler are that test's messages.
+
+Every failing compare in all three phases is a READ IMMEDIATELY AFTER A
+WRITE TO THE SAME ADDRESS -- which is exactly the path where `rf_main`
+drives `waddr` and `raddr` from the same `a[16:1]`. Changing the BRAM's
+mixed-port mode from DONT_CARE to OLD_DATA did not move it, so the fault is
+in WHEN the CPU samples that read-back, not in the memory's
+read-during-write mode.
+
+**Next, and in simulation rather than in 32-minute builds:** the failing
+sequence is "write X, read X back, compare" against `rf_main`, which a
+Verilator bench can drive directly in minutes. Make it red first, then fix.
+Ray Force never trips this because its boot does not run this test.
+
+**(superseded) The diagnostic was the main CPU's program counter.** `rf_main` still
 computes `last_pc`, but the page row that showed it was given to
 `PIVOT WR:SND PC` in B5, so nothing reports it any more. One build that puts
 the main CPU's PC back on the page says immediately whether it is in a
