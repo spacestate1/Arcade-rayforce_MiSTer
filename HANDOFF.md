@@ -143,7 +143,40 @@ and Ray Force writes 0) is an explicit TODO in MAME too -- "several games
 configure timer-based pseudo-hblank int5 here at POST" -- and MAME runs the
 game without it, so that register is not the cause either.
 
-**The next step is to see where the board diverges AFTER those 4096 writes:**
+**Where it actually stops (measured 2026-08-28, build `28142635`).** The
+game's POST is a byte-by-byte RAM test: for every byte address it writes
+FF, AA, 55, 00 and kicks the watchdog (0x4A0000) between each, so eight bus
+writes per byte. MAME walks it from 0x400000 straight through 0x401D49 and
+beyond without pausing.
+
+The board gets to byte **0x4001FD and stops writing altogether**. Two ring
+captures six seconds apart hold the *identical* 1025 distinct operations --
+not a loop cycling through them again, the ring simply stops advancing --
+so the CPU is spinning somewhere that performs no writes, i.e. on a read.
+That is about 4,100 bus writes in, which is why the WRITE HASH row (frozen
+at 4,096) still matches MAME: the divergence happens just past the end of
+what that row can see.
+
+Nothing is special about that address in MAME's stream -- it writes
+0x4001FE, 0x4001FF, 0x400200 and carries on -- so the boundary is ours, not
+the game's. Note also that MAME has issued **no** sound-reset (0xC80000) and
+**no** dual-port RAM writes by this point, so the sound board is not what it
+is waiting for.
+
+Two hypotheses were tested and eliminated: the timer-control register
+0x4C0000 (MAME ignores it too and runs the game), and non-deterministic
+mixed-port read-during-write on the BRAMs (changed to OLD_DATA in
+`28142635` -- kept, since it is strictly safer, but the symptoms did not
+move at all).
+
+**The next diagnostic is the main CPU's program counter.** `rf_main` still
+computes `last_pc`, but the page row that showed it was given to
+`PIVOT WR:SND PC` in B5, so nothing reports it any more. One build that puts
+the main CPU's PC back on the page says immediately whether it is in a
+retry loop inside the RAM test, in an exception handler, or parked on a poll
+-- which is the difference between a RAM readback bug and a missing device.
+
+**The older next step, once that is known:**
 capture the board's write ring (`UART Debug = Write Ring`) and diff it
 against the oracle's stream past that point. One obstacle to clear first:
 setting the UART mode for this game did not take. Both MRAs declare
