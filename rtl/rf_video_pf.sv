@@ -29,6 +29,15 @@
 //  apply. Source pixel gx therefore lands on tile 63 - (gx >> 4), and the
 //  pixel column inside the tile is j ^ 15 ^ (flipx ? 15 : 0).
 //
+//  The tile fetch overlaps the unpack: the next tile's SDRAM request goes
+//  out as soon as this tile's row has landed, while the 16-cycle writer is
+//  still draining it, and a row that lands before the writer is free waits
+//  in a one-entry pending slot. The first version gated the fetch on the
+//  writer being idle, so every tile cost attribute read + fetch + unpack in
+//  series -- 3107 of the 3456 clocks on hardware, the tightest number on
+//  the self-test page, and one the sprite engine's fetches (lowest priority
+//  on the same SDRAM, but they still occupy it) would have pushed over.
+//
 //  Buffers are double-banked: a line is built into one bank while the mixer
 //  reads the previous line out of the other. The bank swap is at rd_start,
 //  which also captures the per-line read parameters, because by then the
@@ -137,7 +146,7 @@ module rf_video_pf
     logic               row_used;
     logic        [9:0]  gxt;           // 16-aligned source x of tile k
     logic        [5:0]  tx;
-    logic       [15:0]  attr, code;
+    logic       [15:0]  attr;
 
     wire signed [23:0] fx_x_cur = b_fx_x[bpf];
     wire signed [23:0] rs_ext   = {{4{rowscroll[bpf][19]}}, rowscroll[bpf]};
@@ -171,6 +180,16 @@ module rf_video_pf
                                        // moves on to the next playfield while
                                        // this writer is still draining
 
+    // a fetched row waiting for the writer (at most one: the next fetch is
+    // not issued while this is occupied)
+    logic        pend_v;
+    logic  [9:0] pend_gxt;
+    logic [95:0] pend_pix;
+    logic  [8:0] pend_pal;
+    logic        pend_bsel, pend_flipx, pend_flip;
+    logic  [5:0] pend_mask;
+    logic  [1:0] pend_pf;
+
     wire  [3:0] wr_col = wr_j ^ {4{wr_flip}} ^ {4{wr_flipx}};
     wire  [5:0] wr_pen = wr_pix[wr_col * 6 +: 6] & wr_mask;
     wire  [9:0] wr_addr = {wb, 9'((wr_gxt + {6'd0, wr_j}) & 10'h1FF)};
@@ -182,23 +201,73 @@ module rf_video_pf
         if (wr_active) wr_en[wr_pf] = 1'b1;
     end
 
+    wire row_lands = (bst == B_WAIT) && gfx_valid;
+
     always_ff @(posedge clk) begin
         if (reset) begin
             wr_active <= 1'b0;
-        end else if (wr_active) begin
-            if (wr_j == 4'd15) wr_active <= 1'b0;
-            wr_j <= wr_j + 4'd1;
-        end else if (bst == B_WAIT && gfx_valid) begin
-            wr_active <= 1'b1;
-            wr_j      <= 4'd0;
-            wr_gxt    <= gxt;
-            wr_pix    <= gfx_pix;
-            wr_pal    <= attr[8:0];
-            wr_bsel   <= attr[9];
-            wr_flipx  <= attr[14];
-            wr_mask   <= {attr[11:10] & ~attr[1:0], 4'hF};
-            wr_flip   <= flip;
-            wr_pf     <= bpf;
+            pend_v    <= 1'b0;
+        end else begin
+            if (wr_active) begin
+                wr_j <= wr_j + 4'd1;
+                if (wr_j == 4'd15) begin
+                    if (pend_v) begin
+                        // straight on to the waiting row
+                        wr_j      <= 4'd0;
+                        wr_gxt    <= pend_gxt;
+                        wr_pix    <= pend_pix;
+                        wr_pal    <= pend_pal;
+                        wr_bsel   <= pend_bsel;
+                        wr_flipx  <= pend_flipx;
+                        wr_mask   <= pend_mask;
+                        wr_flip   <= pend_flip;
+                        wr_pf     <= pend_pf;
+                        pend_v    <= 1'b0;
+                    end else begin
+                        wr_active <= 1'b0;
+                    end
+                end
+            end else if (pend_v) begin
+                // a row landed on the writer's last cycle and waited one
+                wr_active <= 1'b1;
+                wr_j      <= 4'd0;
+                wr_gxt    <= pend_gxt;
+                wr_pix    <= pend_pix;
+                wr_pal    <= pend_pal;
+                wr_bsel   <= pend_bsel;
+                wr_flipx  <= pend_flipx;
+                wr_mask   <= pend_mask;
+                wr_flip   <= pend_flip;
+                wr_pf     <= pend_pf;
+                pend_v    <= 1'b0;
+            end else if (row_lands) begin
+                // writer idle: start directly, as before
+                wr_active <= 1'b1;
+                wr_j      <= 4'd0;
+                wr_gxt    <= gxt;
+                wr_pix    <= gfx_pix;
+                wr_pal    <= attr[8:0];
+                wr_bsel   <= attr[9];
+                wr_flipx  <= attr[14];
+                wr_mask   <= {attr[11:10] & ~attr[1:0], 4'hF};
+                wr_flip   <= flip;
+                wr_pf     <= bpf;
+            end
+
+            // a row landing while the writer is busy waits here. Written
+            // last so that, on the one cycle the slot is both consumed and
+            // refilled, the refill wins (the consumer read the old row).
+            if (row_lands && (wr_active || pend_v)) begin
+                pend_v     <= 1'b1;
+                pend_gxt   <= gxt;
+                pend_pix   <= gfx_pix;
+                pend_pal   <= attr[8:0];
+                pend_bsel  <= attr[9];
+                pend_flipx <= attr[14];
+                pend_mask  <= {attr[11:10] & ~attr[1:0], 4'hF};
+                pend_flip  <= flip;
+                pend_pf    <= bpf;
+            end
         end
     end
 
@@ -320,13 +389,16 @@ module rf_video_pf
                 bst      <= B_SCAN;
             end
 
-            // MAME's row-usage test: any nonzero code word in tilemap row ty
+            // MAME's row-usage test: any nonzero code word in tilemap row ty.
+            // The RAM registers its address and answers the cycle after, so
+            // the word addressed when scan_i was n is on pf_q when scan_i is
+            // n+2: check from 2, and finish at 65 with word 63 in hand.
             B_SCAN: begin
                 ty <= uy[8:4];
                 py <= uy[3:0];
-                pf_addr <= {bpf, uy[8:4], scan_i[5:0], 1'b1};
-                if (scan_i != 7'd0 && pf_q != 16'd0) row_used <= 1'b1;
-                if (scan_i == 7'd64) begin
+                if (scan_i <= 7'd63) pf_addr <= {bpf, uy[8:4], scan_i[5:0], 1'b1};
+                if (scan_i >= 7'd2 && pf_q != 16'd0) row_used <= 1'b1;
+                if (scan_i == 7'd65) begin
                     b_used[bpf] <= row_used | (pf_q != 16'd0);
                     k   <= 6'd0;
                     gxt <= {gx_start[9:4], 4'd0};
@@ -335,9 +407,15 @@ module rf_video_pf
                 scan_i <= scan_i + 7'd1;
             end
 
-            // tile (ty, tx): attribute word then code word. The RAM answers
-            // one clock after the address, so the attribute is on pf_q in the
-            // same cycle the code address goes out, and the code one later.
+            // tile (ty, tx): attribute word then code word. The RAM registers
+            // the address and answers the cycle after: the attribute address
+            // set in TILE_C is presented during W1 and its data is on pf_q
+            // during W2; the code address set in W1 is answered during FETCH,
+            // where pf_q holds still because the address does.
+            //
+            // HISTORY: this was right, then "fixed" to sample one cycle
+            // earlier to satisfy a bench whose RAM model had no latency, and
+            // the hardware showed a black screen. The bench was wrong.
             B_TILE_A: begin
                 tx      <= flip ? (6'd63 - gxt[9:4]) : gxt[9:4];
                 bst     <= B_TILE_C;
@@ -348,18 +426,19 @@ module rf_video_pf
             end
             B_TILE_W1: begin
                 pf_addr <= a_code;
-                attr    <= pf_q;                    // attribute arrives now
                 bst     <= B_TILE_W2;
             end
             B_TILE_W2: begin
-                code    <= pf_q;                    // code arrives now
+                attr    <= pf_q;                    // attribute arrives now
                 bst     <= B_FETCH;
             end
             B_FETCH: begin
-                // the previous tile's unpack may still be writing, and
-                // rf_gfx_bus drops a req while busy
-                if (!gfx_busy && !wr_active) begin
-                    gfx_code <= code[13:0];
+                // pf_q is the code word from here on. The previous tile's
+                // unpack may still be writing -- that is the point -- but
+                // the pending slot must be free to catch this row if it lands
+                // early, and rf_gfx_bus drops a req while busy
+                if (!gfx_busy && !pend_v) begin
+                    gfx_code <= pf_q[13:0];
                     gfx_row  <= py ^ {4{attr[15]}};
                     gfx_req  <= 1'b1;
                     bst      <= B_WAIT;
@@ -384,8 +463,9 @@ module rf_video_pf
                 end
             end
 
-            // hand the line over; the y accumulators step for the next one
-            B_DONE: if (!wr_active) begin
+            // hand the line over once the writer has drained; the y
+            // accumulators step for the next one
+            B_DONE: if (!wr_active && !pend_v) begin
                 for (int i = 0; i < 4; i = i + 1) begin
                     d_fx_x[i] <= b_fx_x[i];
                     d_xs[i]   <= b_xs[i];

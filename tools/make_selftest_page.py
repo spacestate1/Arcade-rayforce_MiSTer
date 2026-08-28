@@ -22,32 +22,32 @@ ST_C0, ST_W = 26, 4         # PASS / FAIL / WAIT / BUSY
 PAGE = [
     ("RAY FORCE / GUNLOCK   TAITO F3 CORE", 0, 0),
     ("SELF TEST",                           0, 0),
-    ("",                                    0, 0),
     ("-- LOAD AND FETCH -------------------", 0, 0),
     ("ROM BYTES",                           1, 1),
     ("ROM CHECKSUM",                        1, 1),
     ("SDRAM BIST",                          1, 1),
-    ("",                                    0, 0),
     ("-- CPU AND MEMORY MAP ---------------", 0, 0),
-    ("WRITE COUNT",                         1, 1),
+    ("PIVOT WR:SND PC",                     1, 1),   # {pivot RAM writes (must stay 0), sound CPU PC}
     ("WRITE HASH",                          1, 1),
     ("FETCH IN RANGE",                      1, 1),
-    ("LAST PC",                             1, 0),
-    ("",                                    0, 0),
+    ("SPR REC : DROP",                      1, 1),   # {records built last prepass, rows dropped at the cap}
     ("-- INTERRUPTS -----------------------", 0, 0),
-    ("FRAME COUNT",                         1, 0),
+    ("SND ES WR : RUN",                     1, 1),   # {sound CPU ES5505 writes, running}
     ("IRQ2 ACK/64FRM",                      1, 1),
-    ("IRQ3 ACK/64FRM",                      1, 1),
-    ("",                                    0, 0),
+    ("SMP BIST:OVR:DR",                     1, 1),   # {sample-region BIST sum[15:0], sampler overruns, queue drops}
     ("-- VIDEO RAM WRITES -----------------", 0, 0),
     ("PALETTE",                             1, 1),
     ("PLAYFIELD",                           1, 1),
     ("SPRITE",                              1, 1),
     ("LINE RAM",                            1, 1),
     ("TEXT AND CHAR",                       1, 1),
-    ("",                                    0, 0),
+    ("-- VIDEO PIPELINE / FRAME -----------", 0, 0),
+    ("MIX : BUILD",                         1, 1),
+    ("FETCH : PIX NZ",                      1, 1),
+    ("MAXFETCH:BUILD",                      1, 1),
+    ("TILE NZ:PF:PAL",                      1, 1),
     ("BUILD",                               1, 0),
-    ("UART 115200 8N1 ON /DEV/TTYS1",       0, 0),
+    ("SPRLINE : LATE",                      1, 1),   # {longest sprite line draw, lines the mixer started before the draw finished them}
 ]
 
 assert len(PAGE) == ROWS, f"{len(PAGE)} rows, expected {ROWS}"

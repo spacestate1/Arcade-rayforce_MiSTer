@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
 
     Vpf_top* t = new Vpf_top;
     Chan lo, hi;
-    uint16_t lq = 0, pq = 0;
+    uint32_t ra_l = 0, ra_p = 0;
     long long cyc = 0;
 
     auto step = [&]() {                   // one cpu edge + ram edges between
@@ -82,10 +82,12 @@ int main(int argc, char** argv) {
             t->ch_hi_dout = hi.dout; t->ch_hi_ready = hi.ready;
             t->clk_ram = 1; t->eval(); t->clk_ram = 0; t->eval();
         }
-        t->lr_q = lq; t->pf_q = pq;
+        // registered-address BRAM: q is mem[address presented last cycle]
+        t->lr_q = ra_l < lram.size() ? lram[ra_l] : 0;
+        t->pf_q = ra_p < pram.size() ? pram[ra_p] : 0;
+        uint32_t nl = t->lr_addr, np = t->pf_addr;
         t->clk = 1; t->eval();
-        lq = t->lr_addr < lram.size() ? lram[t->lr_addr] : 0;   // 1-cycle BRAM
-        pq = t->pf_addr < pram.size() ? pram[t->pf_addr] : 0;
+        ra_l = nl; ra_p = np;
         t->clk = 0; t->eval();
         cyc++;
     };

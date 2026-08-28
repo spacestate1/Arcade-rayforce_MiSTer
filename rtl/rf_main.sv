@@ -69,6 +69,7 @@ module rf_main
     //   [0]=right [1]=left [2]=down [3]=up, buttons from [4],
     //   Start=[10] Coin=[11] Service=[12]
     input  logic [15:0] j0,
+    input  logic        pause,          // hold the CPU (MiSTer Pause button)
     input  logic [15:0] j1,
     input  logic        test_sw,        // cabinet TEST switch (OSD toggle)
 
@@ -110,6 +111,27 @@ module rf_main
     output logic [15:0] irq3_rate,
     output logic        irq_rate_valid,
 
+    // ---- sound board (Phase 3) -------------------------------------------
+    // the MB8421's other side, driven by rf_sound_main
+    input  logic  [9:0] snd_dp_addr,
+    input  logic [15:0] snd_dp_wdata,
+    input  logic        snd_dp_wren,
+    input  logic  [1:0] snd_dp_be,
+    output logic [15:0] snd_dp_q,
+    // C80100 asserts the sound CPU's reset, C80000 releases it; held from
+    // boot (taito_f3.cpp machine_reset asserts it)
+    output logic        snd_reset,
+    // when ring_ext_sel, the write ring records ring_ext_* (the sound
+    // CPU's chip writes) instead of this CPU's writes
+    input  logic        ring_ext_sel,
+    input  logic        ring_ext_we,
+    input  logic [55:0] ring_ext_data,
+    // pivot RAM is a stub (Ray Force only ever CLEARS it -- one 64 KB
+    // write of zeros at boot, and all 30 dumped frames are zero -- and its
+    // 64 M10Ks are the sound RAM's); this counts non-zero writes to it so
+    // that assumption is checked on every run
+    output logic [15:0] pivot_wr_cnt,
+
     // write-ring dump port (UART side)
     input  logic [11:0] ring_raddr,
     output logic [55:0] ring_rdata,
@@ -149,7 +171,9 @@ module rf_main
                     rom_wait <= 1'b0;
                     clkena   <= 1'b1;
                 end
-            end else if (!clkena) begin
+            end else if (!clkena && !pause) begin
+                // pause: no further clock enables, so the CPU freezes between
+                // bus cycles (a ROM fetch in flight still completes above)
                 if (sel_rom && (busstate == 2'b00 || busstate == 2'b10)) begin
                     prog_addr <= a[21:1];
                     prog_req  <= 1'b1;
@@ -399,9 +423,24 @@ module rf_main
         .clk(clk), .waddr(a[13:1]), .wdata(cpu_dout),
         .wren(cpu_wr && sel_pfx), .be(be), .raddr(a[13:1]), .q(pfx_q));
 
-    rf_bram_be #(.AW(10)) u_dpram (
-        .clk(clk), .waddr(a[10:1]), .wdata(cpu_dout),
-        .wren(cpu_wr && sel_dpram), .be(be), .raddr(a[10:1]), .q(dpram_q));
+    // MB8421: this CPU on port A, the sound CPU on port B (byte lanes)
+    rf_bram_tdp #(.AW(10)) u_dpram (
+        .clk(clk),
+        .a_addr(a[10:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_dpram),
+        .a_be(be), .a_q(dpram_q),
+        .b_addr(snd_dp_addr), .b_wdata(snd_dp_wdata), .b_wren(snd_dp_wren),
+        .b_be(snd_dp_be), .b_q(snd_dp_q));
+
+    // sound CPU reset, from the two write-only addresses
+    wire sel_sndrst_on  = (a[23:8] == 16'hC801);
+    wire sel_sndrst_off = (a[23:8] == 16'hC800);
+    always_ff @(posedge clk) begin
+        if (reset) snd_reset <= 1'b1;
+        else if (cpu_wr && clkena) begin
+            if (sel_sndrst_on)  snd_reset <= 1'b1;
+            if (sel_sndrst_off) snd_reset <= 1'b0;
+        end
+    end
 
     // Video-visible memories: true dual port, CPU on A, renderer on B.
     rf_bram_tdp #(.AW(14)) u_pal (
@@ -446,12 +485,9 @@ module rf_main
         .b_addr(v_line_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_line_q));
 
-    rf_bram_tdp #(.AW(15)) u_pivot (
-        .clk(clk),
-        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pivot),
-        .a_be(be), .a_q(pivot_q),
-        .b_addr(v_pivot_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
-        .b_q(v_pivot_q));
+    // pivot RAM stub: reads as zero on both sides (see pivot_wr_cnt above)
+    assign pivot_q   = 16'h0000;
+    assign v_pivot_q = 16'h0000;
 
     // ---- read mux --------------------------------------------------------
     // Registered one cycle to line up with the BRAM output, exactly like the
@@ -510,7 +546,7 @@ module rf_main
 
     // ---- write-stream capture (unchanged -- the MAME oracle) -------------
     wire wr_frozen = wr_count[12];      // 4096 reached
-    assign ring_full = wr_frozen;
+    assign ring_full = ring_ext_sel ? snd_frozen : wr_frozen;
 
     wire do_write = clkena && (busstate == 2'b11) && !nWr && !wr_frozen;
 
@@ -521,23 +557,41 @@ module rf_main
     wire [31:0] f1 = {f0[30:0], f0[31]} + {16'd0, a[23:16], 6'd0, ~nUDS, ~nLDS};
     wire [31:0] f2 = {f1[30:0], f1[31]} + {16'd0, wdat};
 
+    // the ring records this CPU's writes, or the sound CPU's chip writes
+    // (ring_ext_*) when the UART option selects the sound ring; the write
+    // count and hash (the Phase 1 proof) always follow this CPU
+    // the sound ring freezes on ITS 4096th entry (the init sequence, which
+    // is deterministic and so the best thing to compare), not the main
+    // CPU's, which passed 4096 during boot long before the sound CPU ran
+    logic [12:0] snd_wr_count;
+    wire         snd_frozen = snd_wr_count[12];
+    always_ff @(posedge clk) begin
+        if (reset) snd_wr_count <= 13'd0;
+        else if (ring_ext_sel && ring_ext_we && !snd_frozen) snd_wr_count <= snd_wr_count + 13'd1;
+    end
+    wire        ring_adv  = ring_ext_sel ? (ring_ext_we && !snd_frozen) : do_write;
+    wire [55:0] ring_wdat = ring_ext_sel ? ring_ext_data
+                                         : {~nUDS, ~nLDS, a[23:1], 15'd0, wdat};
+
     always_ff @(posedge clk) begin
         if (reset) begin
             wr_count <= 32'd0;
             wr_hash  <= 32'd0;
             ring_wptr<= 12'd0;
-        end else if (do_write) begin
-            ring_wptr <= ring_wptr + 12'd1;
-            wr_count  <= wr_count + 32'd1;
-            wr_hash   <= f2;
+        end else begin
+            if (ring_adv) ring_wptr <= ring_wptr + 12'd1;
+            if (do_write) begin
+                wr_count  <= wr_count + 32'd1;
+                wr_hash   <= f2;
+            end
         end
     end
 
     rf_bram #(.WIDTH(56), .AW(12)) u_ring (
         .clk(clk),
         .waddr(ring_wptr),
-        .wdata({~nUDS, ~nLDS, a[23:1], 15'd0, wdat}),
-        .wren(do_write),
+        .wdata(ring_wdat),
+        .wren(ring_adv),
         .raddr(ring_raddr), .q(ring_rdata)
     );
 
@@ -548,8 +602,12 @@ module rf_main
     always_ff @(posedge clk) begin
         if (reset) begin
             pf_wr_cnt <= 0; spr_wr_cnt <= 0; pal_wr_cnt <= 0; line_wr_cnt <= 0;
-            txt_wr_cnt <= 0;
+            txt_wr_cnt <= 0; pivot_wr_cnt <= 0;
         end else if (cpu_wr) begin
+            // the game clears pivot RAM at boot (32768 word writes of zero,
+            // seen on build 27230527); a zero written to the zero stub is
+            // nothing, so only NON-ZERO writes count against the assumption
+            if (sel_pivot && cpu_dout != 16'd0 && pivot_wr_cnt != 16'hFFFF) pivot_wr_cnt <= pivot_wr_cnt + 16'd1;
             if (sel_pf   && pf_wr_cnt   != 16'hFFFF) pf_wr_cnt   <= pf_wr_cnt   + 16'd1;
             if (sel_spr  && spr_wr_cnt  != 16'hFFFF) spr_wr_cnt  <= spr_wr_cnt  + 16'd1;
             if (sel_pal  && pal_wr_cnt  != 16'hFFFF) pal_wr_cnt  <= pal_wr_cnt  + 16'd1;

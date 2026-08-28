@@ -29,3 +29,17 @@ sim/pf_out*.txt
 sim/pf_ref*.txt
 sim/mix_out*.txt
 sim/mix_ref*.txt
+sim/pipe_out*.ppm
+sim/pipe_ref*.txt
+sim/spr_ref*.txt
+builds/
+
+# Quartus crash reports / pin dumps / programmer files
+cr_ie_info.json
+c5_pin_model_dump.txt
+jtag.cdf
+
+# generated bench references (es5505_model.py --raw, gen_spr_fb_ref.py)
+sim/es5505_ref*.raw
+sim/spr_fb_ref*.txt
+sim/spr_fetched.txt

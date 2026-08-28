@@ -51,10 +51,16 @@ int main(int argc, char** argv) {
     t->reset = 1; t->frame_start = 0; t->line_start = 0; t->extend = extend;
     uint16_t lq = 0;
 
+    // The BRAM registers its address at the edge and answers the cycle
+    // after: q this cycle is mem[address presented LAST cycle]. An earlier
+    // version of this model returned mem[current address] -- a zero-latency
+    // RAM -- and RTL tuned against it failed on hardware.
+    uint32_t ra = 0;
     auto tick = [&]() {
-        t->lr_q = lq;
+        t->lr_q = (ra < lram.size()) ? lram[ra] : 0;
+        uint32_t ra_n = t->lr_addr;
         t->clk = 1; t->eval();
-        lq = (t->lr_addr < lram.size()) ? lram[t->lr_addr] : 0;  // 1-cycle read
+        ra = ra_n;
         t->clk = 0; t->eval();
     };
 

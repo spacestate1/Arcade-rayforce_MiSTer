@@ -61,6 +61,13 @@ module rayforce_video
     output logic [13:0] v_pal_addr,
     input  logic [15:0] v_pal_q,
 
+    // Refresh Rate OSD option. Native is 262 lines = 58.94 Hz (MAME: 58.97);
+    // 60Hz trims the vertical blank to 257 lines = 60.08 Hz, H rate
+    // unchanged, so the game runs 1.9% fast in exchange for a picture every
+    // 60 Hz display holds without judder. rf_video_pipe carries the same
+    // two constants for its lookahead wrap.
+    input  logic        rate_60,
+
     output logic        vbl_rise,     // one pulse at the vblank interrupt line
 
     // raster position, for the self-test page renderer
@@ -87,6 +94,9 @@ module rayforce_video
     localparam int HS_BEG  = 388, HS_WID  = 32;
     localparam int VS_BEG  = 258, VS_WID  = 3;
 
+    wire [8:0] v_total = rate_60 ? 9'd257 : V_TOTAL[8:0];
+    wire [8:0] vs_beg  = rate_60 ? 9'd1   : VS_BEG[8:0];   // 258 wraps to 1
+
     logic [2:0] div;
     logic [8:0] hcnt;
     logic [8:0] vcnt;
@@ -100,7 +110,7 @@ module rayforce_video
         end else if (div == 3'd7) begin
             if (hcnt == H_TOTAL - 1) begin
                 hcnt <= '0;
-                if (vcnt == V_TOTAL - 1) begin
+                if (vcnt == v_total - 9'd1) begin
                     vcnt  <= '0;
                     frame <= frame + 8'd1;
                 end else vcnt <= vcnt + 9'd1;
@@ -119,7 +129,7 @@ module rayforce_video
     assign hblank = (hcnt < H_START) || (hcnt >= H_END);
     assign vblank = (vcnt < V_START) || (vcnt >= V_END);
     assign hsync  = (hcnt >= HS_BEG) && (hcnt < HS_BEG + HS_WID);
-    assign vsync  = (vcnt >= VS_BEG) && (vcnt < VS_BEG + VS_WID);
+    assign vsync  = (vcnt >= vs_beg) && (vcnt < vs_beg + VS_WID[8:0]);
 
     wire [8:0] x = hcnt - H_START[8:0];   // 0..319 when visible
     wire [8:0] y = vcnt - V_START[8:0];   // 0..223 when visible

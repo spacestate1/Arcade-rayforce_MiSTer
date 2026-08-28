@@ -1,0 +1,383 @@
+//============================================================================
+//  Video pipeline: the verified blocks, driven by the raster.
+//
+//  Line decode (rf_video_line), playfield build (rf_video_pf) over the SDRAM
+//  tile fetch (rf_gfx_bus), and the mixer (rf_video_mix) each work a whole
+//  scanline at a time, so they run AHEAD of the beam and hand off through
+//  double-banked line buffers. During raster line T:
+//
+//      mixer      composes screen line T+1 into output bank (T+1)&1
+//      decoder    decodes  screen line T+2       -- then --
+//      builder    builds   screen line T+2 into its other playfield bank
+//      the beam   reads    output bank T&1
+//
+//  Screen lines are 0..255 (the line-RAM index runs over exactly those);
+//  raster lines 256..261 are the vertical blank and have nothing to decode,
+//  so the lookahead wraps: line 0 is decoded during raster 260 and mixed
+//  during raster 261. frame_start -- which reloads the scroll registers and
+//  clears the per-frame latch state, as the model does at the top of
+//  render_frame -- fires at the start of raster 260, before line 0 is
+//  decoded.
+//
+//  Ordering inside a raster line matters: the mixer latches its copy of the
+//  line decode two clocks after mix_start, so mix_start goes first and the
+//  decoder is started a few clocks later; otherwise the decoder would
+//  already be overwriting line T+1's values with T+2's. The builder waits
+//  for the decoder by construction (pf_go).
+//
+//  Budget per raster line is 3456 clocks. Measured in simulation against a
+//  behavioural SDRAM: mixer 1307, decode + build up to ~2315, concurrent.
+//  The real controller's latency is higher; the count is re-measured on
+//  hardware from the frame counter on the self-test page.
+//
+//  The pivot/text layer (rf_video_pivot) builds alongside the playfields on
+//  its own RAM ports. The sprite engine (rf_video_spr) draws the same line
+//  as the playfields, started at the top of the raster line.
+//============================================================================
+
+module rf_video_pipe
+(
+    input  logic        clk,
+    input  logic        reset,
+    input  logic        clk_ram,
+
+    // raster position from rayforce_video
+    input  logic  [2:0] div,
+    input  logic  [8:0] hcnt,
+    input  logic  [8:0] vcnt,
+    input  logic        hblank,
+    input  logic        vblank,
+    input  logic        rate_60,       // 257-line frame (see rayforce_video)
+
+    // video control registers 0x660000-1F
+    input  logic [7:0][15:0] ctrl0,
+    input  logic [7:0][15:0] ctrl1,
+    input  logic        flip,          // flipscreen (sprite command bit 13)
+
+    // video RAM read ports (B side of the CPU's BRAMs)
+    output logic [14:0] line_addr,
+    input  logic [15:0] line_q,
+    output logic [13:0] pf_addr,
+    input  logic [15:0] pf_q,
+    output logic [13:0] pal_addr,
+    input  logic [15:0] pal_q,
+    output logic [11:0] text_addr,
+    input  logic [15:0] text_q,
+    output logic [11:0] char_addr,
+    input  logic [15:0] char_q,
+    output logic [14:0] pivot_addr,
+    input  logic [15:0] pivot_q,
+
+    // SDRAM channels for the two tile planes
+    output logic [26:1] ch1_addr,
+    input  logic [63:0] ch1_dout,
+    output logic        ch1_req,
+    input  logic        ch1_ready,
+    output logic [26:1] ch2_addr,
+    input  logic [63:0] ch2_dout,
+    output logic        ch2_req,
+    input  logic        ch2_ready,
+
+    // sprite RAM read port (B side of the CPU's sprite BRAM), for the walker
+    output logic [14:0] spr_addr,
+    input  logic [15:0] spr_q,
+
+    // sprite gfx SDRAM channels: two fetch buses (A, B) x two planes (lo,
+    // hi). Only ch4 is free on the real controller, so all four share it
+    // through rf_spr_ch_share at Rayforce.sv (and in the bench's pipe_top).
+    output logic [26:1] spr_a_lo_addr,
+    input  logic [63:0] spr_a_lo_dout,
+    output logic        spr_a_lo_req,
+    input  logic        spr_a_lo_ready,
+    output logic [26:1] spr_a_hi_addr,
+    input  logic [63:0] spr_a_hi_dout,
+    output logic        spr_a_hi_req,
+    input  logic        spr_a_hi_ready,
+    output logic [26:1] spr_b_lo_addr,
+    input  logic [63:0] spr_b_lo_dout,
+    output logic        spr_b_lo_req,
+    input  logic        spr_b_lo_ready,
+    output logic [26:1] spr_b_hi_addr,
+    input  logic [63:0] spr_b_hi_dout,
+    output logic        spr_b_hi_req,
+    input  logic        spr_b_hi_ready,
+
+    output logic [23:0] rgb,           // blanked outside the visible area
+
+    // per-frame diagnostics for the self-test page, latched at frame end
+    output logic [31:0] dbg_lines,     // {mixer lines done, playfield builds done}
+    output logic [31:0] dbg_fetch,     // {tile fetches done, non-black output pixels}
+    output logic [31:0] dbg_max,       // {longest fetch, longest build} in clocks
+    output logic [31:0] dbg_nz,        // {fetches with non-zero pixels,
+                                       //  OR of playfield samples[7:0],
+                                       //  OR of palette reads[7:0]}
+    output logic [31:0] dbg_spr,       // {longest sprite line draw in clocks,
+                                       //  lines the mixer started before the
+                                       //  sprite draw had finished them}
+    output logic [31:0] dbg_rec        // {sprite-row records built last
+                                       //  prepass, rows dropped at the cap}
+);
+
+    localparam int H_START = 46;
+
+    // ---- raster-driven sequencing ----------------------------------------
+    // hcnt holds each value for eight clocks (div 0..7); div picks the clock.
+    wire        h0        = (hcnt == 9'd0);
+    // The frame is 262 lines native or 257 with the 60 Hz option (the same
+    // pair of constants as rayforce_video); either way the last two raster
+    // lines are the wrap where line 0 is decoded, then mixed.
+    wire  [8:0] v_last    = rate_60 ? 9'd256 : 9'd261;     // V_TOTAL - 1
+    wire  [8:0] v_last1   = v_last - 9'd1;                 // V_TOTAL - 2
+    wire  [8:0] l_mix     = (vcnt == v_last)  ? 9'd0 : vcnt + 9'd1;
+    wire  [8:0] l_bld     = (vcnt == v_last1) ? 9'd0 :
+                            (vcnt == v_last)  ? 9'd1 : vcnt + 9'd2;
+    wire        do_mix    = (l_mix <= 9'd255);
+    wire        do_bld    = (l_bld <= 9'd255);
+
+    logic frame_start, mix_start, dec_start;
+    logic [7:0] bld_y;
+    logic       mix_bank;
+    logic [7:0] mix_y;                  // the line the mixer is composing
+
+    always_ff @(posedge clk) begin
+        frame_start <= 1'b0;
+        mix_start   <= 1'b0;
+        dec_start   <= 1'b0;
+        if (!reset && h0) begin
+            case (div)
+                3'd0: frame_start <= (vcnt == v_last1);
+                3'd1: if (do_mix) begin
+                          mix_start <= 1'b1;
+                          mix_bank  <= l_mix[0];
+                          mix_y     <= l_mix[7:0];
+                      end
+                // (the sprite draw is not started per line: it runs ahead
+                // of the mixer on its own, see rf_video_spr)
+                3'd4: if (do_bld) begin
+                          dec_start <= 1'b1;
+                          bld_y     <= l_bld[7:0];
+                      end
+                default: ;
+            endcase
+        end
+    end
+
+    // ---- line decoder ----------------------------------------------------
+    logic line_busy;
+    logic [3:0][8:0]  colscroll, x_scale, y_scale, clip_l, clip_r;
+    logic [3:0][19:0] rowscroll;
+    logic [3:0]       pf_mosaic, sp_bsel, pf_alt;
+    logic [4:0]       x_sample;
+    logic [3:0][3:0]  blend;
+    logic [7:0]       fx_6400, pivot_control;
+    logic [15:0]      bg_palette, pivot_enable, pivot_mix;
+    logic             pivot_bsel, pivot_mosaic, sp_mosaic;
+    logic [3:0][15:0] sp_mix, pf_pal_add, pf_mix;
+
+    // gunlock is an "extend" (1024x512) board: MAME takes that from its
+    // per-game config table, not from control word 15, and so does this.
+    rf_video_line line (
+        .clk(clk), .reset(reset),
+        .frame_start(frame_start), .line_start(dec_start),
+        .y(flip ? (8'd255 - bld_y) : bld_y),
+        .extend(1'b1), .busy(line_busy),
+        .lr_addr(line_addr), .lr_q(line_q),
+        .clip_l(clip_l), .clip_r(clip_r), .blend(blend), .x_sample(x_sample),
+        .fx_6400(fx_6400), .bg_palette(bg_palette),
+        .pivot_control(pivot_control), .pivot_bsel(pivot_bsel),
+        .pivot_enable(pivot_enable), .pivot_mix(pivot_mix), .pivot_mosaic(pivot_mosaic),
+        .sp_mix(sp_mix), .sp_bsel(sp_bsel), .sp_mosaic(sp_mosaic),
+        .pf_colscroll(colscroll), .pf_alt_tilemap(pf_alt),
+        .pf_x_scale(x_scale), .pf_y_scale(y_scale), .pf_pal_add(pf_pal_add),
+        .pf_rowscroll(rowscroll), .pf_mix(pf_mix), .pf_mosaic(pf_mosaic)
+    );
+
+    // the builder starts the clock after the decoder finishes
+    logic line_busy_d, pf_go, pf_busy;
+    always_ff @(posedge clk) begin
+        line_busy_d <= line_busy;
+        pf_go       <= line_busy_d & ~line_busy;
+    end
+
+    // ---- playfields + tile fetch -----------------------------------------
+    logic [13:0] gfx_code; logic [3:0] gfx_row;
+    logic gfx_req, gfx_valid, gfx_busy;
+    logic [95:0] gfx_pix;
+    logic pf_rd_start, pf_rd_step;
+    logic [3:0][15:0] pf_rd_q;
+    logic [3:0] pf_used;
+
+    rf_video_pf pf (
+        .clk(clk), .reset(reset),
+        .frame_start(frame_start), .ctrl0(ctrl0), .flip(flip),
+        .line_start(pf_go), .screen_y(bld_y),
+        .colscroll(colscroll), .x_scale(x_scale), .y_scale(y_scale),
+        .rowscroll(rowscroll), .mosaic_en(pf_mosaic), .x_sample(x_sample),
+        .busy(pf_busy),
+        .pf_addr(pf_addr), .pf_q(pf_q),
+        .gfx_code(gfx_code), .gfx_row(gfx_row), .gfx_req(gfx_req),
+        .gfx_pix(gfx_pix), .gfx_valid(gfx_valid), .gfx_busy(gfx_busy),
+        .rd_start(pf_rd_start), .rd_step(pf_rd_step), .rd_q(pf_rd_q), .rd_used(pf_used)
+    );
+
+    rf_gfx_bus gfx (
+        .clk_cpu(clk), .reset(reset),
+        .code(gfx_code), .row(gfx_row), .req(gfx_req),
+        .pix(gfx_pix), .valid(gfx_valid), .busy(gfx_busy),
+        .clk_ram(clk_ram),
+        .ch_lo_addr(ch1_addr), .ch_lo_dout(ch1_dout), .ch_lo_req(ch1_req), .ch_lo_ready(ch1_ready),
+        .ch_hi_addr(ch2_addr), .ch_hi_dout(ch2_dout), .ch_hi_req(ch2_req), .ch_hi_ready(ch2_ready)
+    );
+
+    // ---- pivot / text layer ------------------------------------------------
+    // Same start as the playfield builder (after the decoder), same line;
+    // read by the mixer at smp_x out of the bank it is composing.
+    logic        pv_busy, pv_opaque, pv_used;
+    logic [15:0] pv_color;
+
+    rf_video_pivot pivot (
+        .clk(clk), .reset(reset),
+        .frame_start(frame_start), .ctrl1(ctrl1), .flip(flip),
+        .line_start(pf_go), .screen_y(bld_y),
+        .pivot_control(pivot_control), .mosaic_en(pivot_mosaic), .x_sample(x_sample),
+        .busy(pv_busy),
+        .text_addr(text_addr), .text_q(text_q),
+        .char_addr(char_addr), .char_q(char_q),
+        .pivot_addr(pivot_addr), .pivot_q(pivot_q),
+        .rd_bank(mix_bank), .rd_x(smp_x),
+        .rd_color(pv_color), .rd_opaque(pv_opaque), .rd_used(pv_used)
+    );
+
+    // ---- sprite engine ---------------------------------------------------
+    // Prepass once per frame (frame_start swaps its double-banked buckets and
+    // walks sprite RAM); the draw runs ahead of the mixer into its own ring
+    // of line buffers, held back only by the mixer's line (mix_y); the mixer
+    // samples it at smp_x for the line it is composing.
+    logic        spr_prepass_busy, spr_line_busy;
+    logic  [8:0] spr_lines_done;
+    logic [15:0] spr_rec_peak, spr_rec_drop;
+    logic [15:0] sp_color;
+    logic  [3:0] sp_used;
+    wire   [8:0] smp_x;
+
+    rf_video_spr sprites (
+        .clk(clk), .reset(reset), .clk_ram(clk_ram),
+        .frame_start(frame_start), .prepass_busy(spr_prepass_busy),
+        .line_busy(spr_line_busy), .lines_done(spr_lines_done),
+        .rec_peak(spr_rec_peak), .rec_drop(spr_rec_drop),
+        .spr_addr(spr_addr), .spr_q(spr_q),
+        .ch_a_lo_addr(spr_a_lo_addr), .ch_a_lo_dout(spr_a_lo_dout), .ch_a_lo_req(spr_a_lo_req), .ch_a_lo_ready(spr_a_lo_ready),
+        .ch_a_hi_addr(spr_a_hi_addr), .ch_a_hi_dout(spr_a_hi_dout), .ch_a_hi_req(spr_a_hi_req), .ch_a_hi_ready(spr_a_hi_ready),
+        .ch_b_lo_addr(spr_b_lo_addr), .ch_b_lo_dout(spr_b_lo_dout), .ch_b_lo_req(spr_b_lo_req), .ch_b_lo_ready(spr_b_lo_ready),
+        .ch_b_hi_addr(spr_b_hi_addr), .ch_b_hi_dout(spr_b_hi_dout), .ch_b_hi_req(spr_b_hi_req), .ch_b_hi_ready(spr_b_hi_ready),
+        .rd_x(smp_x), .rd_line(mix_y),
+        .rd_color(sp_color), .rd_used(sp_used)
+    );
+
+    // ---- mixer -----------------------------------------------------------
+    logic mix_busy, out_valid;
+    logic [8:0] out_x;
+    logic [23:0] out_rgb;
+    wire         x_req;
+    wire   [8:0] x_req_x;
+
+    rf_video_mix mix (
+        .clk(clk), .reset(reset),
+        .line_start(mix_start), .busy(mix_busy),
+        .clip_l(clip_l), .clip_r(clip_r), .blend(blend), .bg_palette(bg_palette),
+        .pivot_mix(pivot_mix), .pivot_bsel(pivot_bsel),
+        .sp_mix(sp_mix), .sp_bsel(sp_bsel),
+        .pf_pal_add(pf_pal_add), .pf_mix(pf_mix),
+        .pf_rd_start(pf_rd_start), .pf_rd_step(pf_rd_step), .pf_q(pf_rd_q), .pf_used(pf_used),
+        .x_req(x_req), .x_req_x(x_req_x), .smp_x(smp_x),
+        .sp_color(sp_color), .sp_used(sp_used),
+        .pv_color(pv_color), .pv_opaque(pv_opaque), .pv_used(pv_used),
+        .pal_addr(pal_addr), .pal_q(pal_q),
+        .out_valid(out_valid), .out_x(out_x), .out_rgb(out_rgb)
+    );
+
+    // ---- output line buffer ----------------------------------------------
+    // Two banks of 320 x 24 bits. The mixer writes bank (T+1)&1 during
+    // raster line T; the beam reads bank T&1. Read one pixel ahead and latch
+    // at div 7, the same alignment rf_selftest uses (proven on hardware).
+    wire  [8:0] xn = hcnt + 9'd1 - H_START[8:0];
+    wire [23:0] lb_q;
+
+    rf_bram #(.WIDTH(24), .AW(10)) u_lbuf (
+        .clk(clk),
+        .waddr({mix_bank, out_x}), .wdata(out_rgb), .wren(out_valid),
+        .raddr({vcnt[0], xn}), .q(lb_q)
+    );
+
+    logic [23:0] rgb_q;
+    always_ff @(posedge clk) if (div == 3'd7) rgb_q <= lb_q;
+
+    assign rgb = (hblank | vblank) ? 24'd0 : rgb_q;
+
+    // ---- diagnostics -------------------------------------------------------
+    // What the pipeline actually did last frame. Expected, from sim/pipe_tb
+    // on frame 1800: dbg_lines 01000100 (256 mixer lines, 256 builds),
+    // dbg_fetch 2A8C58F7 (10892 tile fetches, 22775 non-black pixels out),
+    // dbg_max 000C0872 (longest fetch 12 clocks, longest build 2162),
+    // dbg_nz with all three fields non-zero. A black screen with these at
+    // zero is a pipeline that never started; with fetches at zero it is the
+    // SDRAM channels; fetches but no non-zero tile data is the SDRAM
+    // contents; tile data but zero playfield samples is the unpack; samples
+    // but black pixels is the mixer or the palette port; non-black pixels
+    // and still a black screen is the line buffer readout or the output mux.
+    logic [15:0] n_mix, n_bld, n_fet, n_pnz, n_tnz, t_fet, t_fet_max, t_bld, t_bld_max;
+    logic [15:0] t_spr, t_spr_max, n_spr_miss;
+    logic  [7:0] pf_or, pal_or;
+    logic        mix_busy_d, pf_busy_d, gfx_busy_d, spr_busy_d;
+    wire         frame_end = h0 && (div == 3'd0) && (vcnt == 9'd0);
+
+    always_ff @(posedge clk) begin
+        mix_busy_d <= mix_busy;
+        pf_busy_d  <= pf_busy;
+        gfx_busy_d <= gfx_busy;
+        spr_busy_d <= spr_line_busy;
+        if (reset) begin
+            n_mix <= 0; n_bld <= 0; n_fet <= 0; n_pnz <= 0; n_tnz <= 0;
+            pf_or <= 0; pal_or <= 0;
+            t_fet <= 0; t_fet_max <= 0; t_bld <= 0; t_bld_max <= 0;
+            t_spr <= 0; t_spr_max <= 0; n_spr_miss <= 0;
+            dbg_lines <= 0; dbg_fetch <= 0; dbg_max <= 0; dbg_nz <= 0; dbg_spr <= 0; dbg_rec <= 0;
+        end else begin
+            if (mix_busy_d && !mix_busy) n_mix <= n_mix + 16'd1;
+            if (pf_busy_d  && !pf_busy)  n_bld <= n_bld + 16'd1;
+            if (gfx_valid)               n_fet <= n_fet + 16'd1;
+            if (gfx_valid && gfx_pix != 96'd0 && n_tnz != 16'hFFFF) n_tnz <= n_tnz + 16'd1;
+            if (out_valid && out_rgb != 24'd0 && n_pnz != 16'hFFFF) n_pnz <= n_pnz + 16'd1;
+            pal_or <= pal_or | pal_q[7:0];
+            pf_or  <= pf_or | pf_rd_q[0][7:0] | pf_rd_q[1][7:0] | pf_rd_q[2][7:0] | pf_rd_q[3][7:0];
+
+            t_fet <= gfx_busy ? t_fet + 16'd1 : 16'd0;
+            if (gfx_busy_d && !gfx_busy && t_fet > t_fet_max) t_fet_max <= t_fet;
+            t_bld <= pf_busy ? t_bld + 16'd1 : 16'd0;
+            if (pf_busy_d && !pf_busy && t_bld > t_bld_max) t_bld_max <= t_bld;
+
+            // The sprite draw falling behind is otherwise SILENT: the mixer
+            // composes a line whose sprites are not all there yet. Count the
+            // lines the mixer started before the draw had finished them, and
+            // the longest single line draw.
+            t_spr <= spr_line_busy ? t_spr + 16'd1 : 16'd0;
+            if (spr_busy_d && !spr_line_busy && t_spr > t_spr_max) t_spr_max <= t_spr;
+            if (mix_start && spr_lines_done <= {1'b0, mix_y} && n_spr_miss != 16'hFFFF)
+                n_spr_miss <= n_spr_miss + 16'd1;
+
+            if (frame_end) begin
+                dbg_lines <= {n_mix, n_bld};
+                dbg_fetch <= {n_fet, n_pnz};
+                dbg_max   <= {t_fet_max, t_bld_max};
+                dbg_nz    <= {n_tnz, pf_or, pal_or};
+                dbg_spr   <= {t_spr_max, n_spr_miss};
+                dbg_rec   <= {spr_rec_peak, spr_rec_drop};
+                n_mix <= 0; n_bld <= 0; n_fet <= 0; n_pnz <= 0; n_tnz <= 0;
+                pf_or <= 0; pal_or <= 0;
+                t_fet_max <= 0; t_bld_max <= 0;
+                t_spr_max <= 0; n_spr_miss <= 0;
+            end
+        end
+    end
+
+endmodule

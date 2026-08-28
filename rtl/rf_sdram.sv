@@ -67,7 +67,24 @@ module sdram
     input      [26:1] ch4_addr,
     output reg [63:0] ch4_dout,
     input             ch4_req,
-    output reg        ch4_ready
+    output reg        ch4_ready,
+
+    // ch5: the sound 68000's program fetch (2026-08-27, Phase 3). Read
+    // only, served after the main CPU and before the sprites: the sound
+    // CPU stalls on every miss, the sprite draw has a ring to absorb its
+    // waits (rf_video_spr).
+    input      [26:1] ch5_addr,
+    output reg [63:0] ch5_dout,
+    input             ch5_req,
+    output reg        ch5_ready,
+
+    // ch6: ES5505 sample lines (rf_smp_bus). Read only, lowest priority:
+    // the sampler's per-voice line cache makes its fetches few and its
+    // deadline soft (a whole sample period).
+    input      [26:1] ch6_addr,
+    output reg [63:0] ch6_dout,
+    input             ch6_req,
+    output reg        ch6_ready
 );
 
 // DQ drive in canonical explicit-OE form. The original wrote 16'bZ into an
@@ -128,7 +145,7 @@ localparam STATE_RFSH    = 10;
 
 
 always @(posedge clk) begin
-    reg [CAS_LATENCY+BURST_LENGTH+1:0] data_ready_delay1, data_ready_delay2, data_ready_delay3, data_ready_delay4;
+    reg [CAS_LATENCY+BURST_LENGTH+1:0] data_ready_delay1, data_ready_delay2, data_ready_delay3, data_ready_delay4, data_ready_delay5, data_ready_delay6;
 
     reg        saved_wr;
     reg [12:0] cas_addr;
@@ -152,10 +169,10 @@ always @(posedge clk) begin
     // request is silently dropped and the client waits forever. This is
     // placement-dependent, which is why enabling ch4 (a refit) stalled the
     // CPU's ch3 fetches even though ch4 has the lowest priority here.
-    reg       ch1_req_s, ch2_req_s, ch3_req_s, ch4_req_s;
-    reg       ch1_req_1, ch2_req_1, ch3_req_1, ch4_req_1;
-    reg       ch1_rq, ch2_rq, ch3_rq, ch4_rq;
-    reg [1:0] ch;
+    reg       ch1_req_s, ch2_req_s, ch3_req_s, ch4_req_s, ch5_req_s, ch6_req_s;
+    reg       ch1_req_1, ch2_req_1, ch3_req_1, ch4_req_1, ch5_req_1, ch6_req_1;
+    reg       ch1_rq, ch2_rq, ch3_rq, ch4_rq, ch5_rq, ch6_rq;
+    reg [2:0] ch;
 
     reg        ch3_rnw_1;
     reg [26:1] ch3_addr_1;
@@ -168,6 +185,8 @@ always @(posedge clk) begin
     ch2_req_s <= ch2_req;  ch2_req_1 <= ch2_req_s;
     ch3_req_s <= ch3_req;  ch3_req_1 <= ch3_req_s;
     ch4_req_s <= ch4_req;  ch4_req_1 <= ch4_req_s;
+    ch5_req_s <= ch5_req;  ch5_req_1 <= ch5_req_s;
+    ch6_req_s <= ch6_req;  ch6_req_1 <= ch6_req_s;
     
     ch3_rnw_1  <= ch3_rnw;
     ch3_addr_1 <= ch3_addr;
@@ -180,11 +199,15 @@ always @(posedge clk) begin
     if (ch2_req_s & ~ch2_req_1) ch2_rq <= 1;
     if (ch3_req_s & ~ch3_req_1) ch3_rq <= 1;
     if (ch4_req_s & ~ch4_req_1) ch4_rq <= 1;
+    if (ch5_req_s & ~ch5_req_1) ch5_rq <= 1;
+    if (ch6_req_s & ~ch6_req_1) ch6_rq <= 1;
 
     ch1_ready <= 0;
     ch2_ready <= 0;
     ch3_ready <= 0;
     ch4_ready <= 0;
+    ch5_ready <= 0;
+    ch6_ready <= 0;
 
     refresh_count <= refresh_count+1'b1;
 
@@ -192,6 +215,8 @@ always @(posedge clk) begin
     data_ready_delay2 <= data_ready_delay2>>1;
     data_ready_delay3 <= data_ready_delay3>>1;
     data_ready_delay4 <= data_ready_delay4>>1;
+    data_ready_delay5 <= data_ready_delay5>>1;
+    data_ready_delay6 <= data_ready_delay6>>1;
 
     dq_reg <= SDRAM_DQ;
 
@@ -218,6 +243,18 @@ always @(posedge clk) begin
     if(data_ready_delay4[2]) ch4_dout[47:32] <= dq_reg;
     if(data_ready_delay4[1]) ch4_dout[63:48] <= dq_reg;
     if(data_ready_delay4[1]) ch4_ready <= 1;
+
+    if(data_ready_delay5[4]) ch5_dout[15:00] <= dq_reg;
+    if(data_ready_delay5[3]) ch5_dout[31:16] <= dq_reg;
+    if(data_ready_delay5[2]) ch5_dout[47:32] <= dq_reg;
+    if(data_ready_delay5[1]) ch5_dout[63:48] <= dq_reg;
+    if(data_ready_delay5[1]) ch5_ready <= 1;
+
+    if(data_ready_delay6[4]) ch6_dout[15:00] <= dq_reg;
+    if(data_ready_delay6[3]) ch6_dout[31:16] <= dq_reg;
+    if(data_ready_delay6[2]) ch6_dout[47:32] <= dq_reg;
+    if(data_ready_delay6[1]) ch6_dout[63:48] <= dq_reg;
+    if(data_ready_delay6[1]) ch6_ready <= 1;
 
     dq_drv_oe <= 1'b0;
 
@@ -306,12 +343,30 @@ always @(posedge clk) begin
                 command    <= CMD_ACTIVE;
                 state      <= STATE_WAIT;
             end
+            else if(ch5_rq) begin
+                {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch5_addr[25:1]};
+                chip       <= ch5_addr[26];
+                saved_wr   <= 0;
+                ch         <= 4;
+                ch5_rq     <= 0;
+                command    <= CMD_ACTIVE;
+                state      <= STATE_WAIT;
+            end
             else if(ch4_rq) begin
                 {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch4_addr[25:1]};
                 chip       <= ch4_addr[26];
                 saved_wr   <= 0;
                 ch         <= 3;
                 ch4_rq     <= 0;
+                command    <= CMD_ACTIVE;
+                state      <= STATE_WAIT;
+            end
+            else if(ch6_rq) begin
+                {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch6_addr[25:1]};
+                chip       <= ch6_addr[26];
+                saved_wr   <= 0;
+                ch         <= 5;
+                ch6_rq     <= 0;
                 command    <= CMD_ACTIVE;
                 state      <= STATE_WAIT;
             end
@@ -334,6 +389,8 @@ always @(posedge clk) begin
                 if(ch == 1) ch2_ready  <= 1;
                 if(ch == 2) ch3_ready  <= 1;
                 if(ch == 3) ch4_ready  <= 1;
+                if(ch == 4) ch5_ready  <= 1;
+                if(ch == 5) ch6_ready  <= 1;
                 state <= STATE_IDLE_2;
             end
             else begin
@@ -342,7 +399,9 @@ always @(posedge clk) begin
                      if(ch == 0) data_ready_delay1[CAS_LATENCY+BURST_LENGTH+1] <= 1;
                 else if(ch == 1) data_ready_delay2[CAS_LATENCY+BURST_LENGTH+1] <= 1;
                 else if(ch == 2) data_ready_delay3[CAS_LATENCY+BURST_LENGTH+1] <= 1;
-                else             data_ready_delay4[CAS_LATENCY+BURST_LENGTH+1] <= 1;
+                else if(ch == 3) data_ready_delay4[CAS_LATENCY+BURST_LENGTH+1] <= 1;
+                else if(ch == 4) data_ready_delay5[CAS_LATENCY+BURST_LENGTH+1] <= 1;
+                else             data_ready_delay6[CAS_LATENCY+BURST_LENGTH+1] <= 1;
             end
         end
       

@@ -55,6 +55,17 @@ module rf_selftest #(
     input  logic [15:0] line_wr_cnt,
     input  logic [15:0] txt_wr_cnt,
     input  logic [31:0] build_hex,
+    input  logic [31:0] vid_lines,     // rf_video_pipe dbg_lines
+    input  logic [31:0] vid_fetch,     // dbg_fetch
+    input  logic [31:0] vid_max,       // dbg_max
+    input  logic [31:0] vid_nz,        // dbg_nz
+    input  logic [31:0] vid_spr,       // dbg_spr
+    input  logic [31:0] vid_rec,       // dbg_rec
+    input  logic [31:0] snd_diag1,     // {pivot RAM writes, sound CPU PC[15:0]}
+    input  logic [31:0] snd_diag2,     // {sound ES5505 writes, 0, sound CPU running}
+    input  logic [31:0] snd_diag3,     // {sample BIST sum[15:0], sampler overruns[7:0], queue drops[7:0]}
+    input  logic        smp_bist_done,
+    input  logic        smp_bist_pass,
 
     // ---- pixel output ----------------------------------------------------
     output logic [23:0] rgb,
@@ -97,51 +108,75 @@ module rf_selftest #(
     begin                                                                    \
         VAL = 32'h0; STA = ST_WAIT;                                          \
         case (ROW)                                                           \
-        5'd4:  begin VAL = dl_bytes;                                         \
+        5'd3:  begin VAL = dl_bytes;                                         \
                  STA = !dl_seen  ? ST_WAIT :                                 \
                        dl_active ? ST_BUSY :                                 \
                        (dl_bytes == EXP_BYTES) ? ST_PASS : ST_FAIL; end      \
-        5'd5:  begin VAL = dl_sum;                                           \
+        5'd4:  begin VAL = dl_sum;                                           \
                  STA = !dl_seen  ? ST_WAIT :                                 \
                        dl_active ? ST_BUSY :                                 \
                        (dl_sum == EXP_SUM) ? ST_PASS : ST_FAIL; end          \
-        5'd6:  begin VAL = bist_sum;                                         \
+        5'd5:  begin VAL = bist_sum;                                         \
                  STA = bist_done ? ((bist_sum == EXP_BIST) ? ST_PASS : ST_FAIL) \
                      : (dl_seen && !dl_active) ? ST_BUSY : ST_WAIT; end      \
-        5'd9:  begin VAL = wr_count;                                         \
-                 STA = (wr_count == EXP_WRC) ? ST_PASS :                     \
-                       (wr_count != 32'h0)   ? ST_BUSY : ST_WAIT; end        \
-        5'd10: begin VAL = wr_hash;                                          \
+        5'd7:  begin VAL = snd_diag1;   /* PIVOT WR : SND PC */              \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       (snd_diag1[31:16] == 16'd0) ? ST_PASS : ST_FAIL; end  \
+        5'd8: begin VAL = wr_hash;                                          \
                  STA = (wr_count == EXP_WRC) ?                               \
                          ((wr_hash == EXP_HASH) ? ST_PASS : ST_FAIL)         \
                      : (wr_count != 32'h0) ? ST_BUSY : ST_WAIT; end          \
-        5'd11: begin VAL = {31'd0, trap_oor};                                \
+        5'd9: begin VAL = {31'd0, trap_oor};                                \
                  STA = trap_oor ? ST_FAIL :                                  \
                        cpu_running ? ST_PASS : ST_WAIT; end                  \
-        5'd12: VAL = last_pc;                                                \
-        5'd15: VAL = {16'd0, frame_cnt};                                     \
-        5'd16: begin VAL = {irq2_rate, irq2_cnt};                            \
+        5'd10: begin VAL = vid_rec;                                          \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       (vid_rec[15:0] == 16'd0) ? ST_PASS : ST_FAIL; end     \
+        5'd12: begin VAL = snd_diag2;   /* SND ES WR : RUN */                \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       !snd_diag2[0] ? ST_WAIT :                             \
+                       (snd_diag2[31:16] != 16'd0) ? ST_PASS : ST_BUSY; end  \
+        5'd13: begin VAL = {irq2_rate, irq2_cnt};                            \
                  STA = !irq_rate_valid ? ST_WAIT :                           \
                        (irq2_rate == EXP_RATE) ? ST_PASS : ST_FAIL; end      \
-        5'd17: begin VAL = {irq3_rate, irq3_cnt};                            \
-                 STA = !irq_rate_valid ? ST_WAIT :                           \
-                       (irq3_rate == EXP_RATE) ? ST_PASS : ST_FAIL; end      \
-        5'd20: begin VAL = {16'd0, pal_wr_cnt};                              \
+        5'd14: begin VAL = snd_diag3;   /* SMP BIST:OVR:DR */               \
+                 STA = !smp_bist_done ? ST_WAIT :                            \
+                       (smp_bist_pass && snd_diag3[15:0] == 16'd0)           \
+                           ? ST_PASS : ST_FAIL; end                          \
+        5'd16: begin VAL = {16'd0, pal_wr_cnt};                              \
                  STA = (pal_wr_cnt  != 16'd0) ? ST_PASS :                    \
                        cpu_running ? ST_BUSY : ST_WAIT; end                  \
-        5'd21: begin VAL = {16'd0, pf_wr_cnt};                               \
+        5'd17: begin VAL = {16'd0, pf_wr_cnt};                               \
                  STA = (pf_wr_cnt   != 16'd0) ? ST_PASS :                    \
                        cpu_running ? ST_BUSY : ST_WAIT; end                  \
-        5'd22: begin VAL = {16'd0, spr_wr_cnt};                              \
+        5'd18: begin VAL = {16'd0, spr_wr_cnt};                              \
                  STA = (spr_wr_cnt  != 16'd0) ? ST_PASS :                    \
                        cpu_running ? ST_BUSY : ST_WAIT; end                  \
-        5'd23: begin VAL = {16'd0, line_wr_cnt};                             \
+        5'd19: begin VAL = {16'd0, line_wr_cnt};                             \
                  STA = (line_wr_cnt != 16'd0) ? ST_PASS :                    \
                        cpu_running ? ST_BUSY : ST_WAIT; end                  \
-        5'd24: begin VAL = {16'd0, txt_wr_cnt};                              \
+        5'd20: begin VAL = {16'd0, txt_wr_cnt};                              \
                  STA = (txt_wr_cnt  != 16'd0) ? ST_PASS :                    \
                        cpu_running ? ST_BUSY : ST_WAIT; end                  \
         5'd26: VAL = build_hex;                                              \
+        5'd22: begin VAL = vid_lines;                                        \
+                 STA = (vid_lines == 32'h01000100) ? ST_PASS :               \
+                       cpu_running ? ST_FAIL : ST_WAIT; end                  \
+        5'd23: begin VAL = vid_fetch;                                        \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       (vid_fetch[15:0] != 16'd0) ? ST_PASS : ST_FAIL; end   \
+        5'd25: begin VAL = vid_nz;                                           \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       (vid_nz[31:16] != 16'd0 && vid_nz[15:8] != 8'd0 &&    \
+                        vid_nz[7:0] != 8'd0) ? ST_PASS : ST_FAIL; end        \
+        5'd24: begin VAL = vid_max;                                          \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       (vid_max[15:0] < 16'd3456 && vid_max[31:16] != 16'd0) \
+                           ? ST_PASS : ST_FAIL; end                          \
+        5'd27: begin VAL = vid_spr;   /* SPRLINE : LATE */                   \
+                 STA = !cpu_running ? ST_WAIT :                              \
+                       (vid_spr[15:0] == 16'd0 && vid_spr[31:16] < 16'd3456) \
+                           ? ST_PASS : ST_FAIL; end                          \
         default: ;                                                           \
         endcase                                                              \
     end

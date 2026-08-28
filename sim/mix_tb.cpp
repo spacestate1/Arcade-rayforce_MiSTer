@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
 
     Vmix_top* t = new Vmix_top;
     Chan lo, hi;
-    uint16_t lq = 0, pq = 0, palq = 0;
+    uint32_t ra_l = 0, ra_p = 0, ra_c = 0;
     long long cyc = 0;
     int cur_sy = 0;
 
@@ -113,11 +113,13 @@ int main(int argc, char** argv) {
         t->sp_used   = L.sp_used;
         t->pv_used   = L.pv_used;
 
-        t->lr_q = lq; t->pf_q = pq; t->pal_q = palq;
+        // registered-address BRAM: q is mem[address presented last cycle]
+        t->lr_q  = ra_l < lram.size()   ? lram[ra_l]   : 0;
+        t->pf_q  = ra_p < pram.size()   ? pram[ra_p]   : 0;
+        t->pal_q = ra_c < palram.size() ? palram[ra_c] : 0;
+        uint32_t nl = t->lr_addr, np = t->pf_addr, nc = t->pal_addr;
         t->clk = 1; t->eval();
-        lq   = t->lr_addr  < lram.size()   ? lram[t->lr_addr]    : 0;
-        pq   = t->pf_addr  < pram.size()   ? pram[t->pf_addr]    : 0;
-        palq = t->pal_addr < palram.size() ? palram[t->pal_addr] : 0;
+        ra_l = nl; ra_p = np; ra_c = nc;
         t->clk = 0; t->eval();
         cyc++;
     };

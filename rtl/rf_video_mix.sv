@@ -121,10 +121,12 @@ module rf_video_mix
     logic        b_bsel [0:NL-1];
     logic [15:0] b_padd [0:NL-1];
     logic [3:0]  b_rank [0:NL-1];
+    logic [3:0]  k;                    // loop scratch, kept at module scope:
+                                       // Quartus 17 rejects declarations
+                                       // inside unnamed blocks
 
     always_comb begin
         for (int i = 0; i < NL; i = i + 1) begin
-            logic [3:0] k;
             k = BASE_KIND[i];
             if (k < 4)       b_mix[i] = pf_mix[k[1:0]];
             else if (k < 8)  b_mix[i] = sp_mix[k[1:0]];
@@ -183,6 +185,7 @@ module rf_video_mix
             logic [1:0]  bm;
             logic        vis;
             logic signed [10:0] ax;
+            logic [15:0] q;                // playfield sample scratch
             mst_t s, n;
 
             always_comb begin
@@ -201,9 +204,8 @@ module rf_video_mix
                 end
 
                 // the sample, by layer kind
+                q = dat[g].pf[kind[1:0]];
                 if (kind < 4) begin
-                    logic [15:0] q;
-                    q      = dat[g].pf[kind[1:0]];
                     color  = {3'b000, q[14:6], 4'b0000} | {10'd0, q[5:0]};
                     opaque = (q[5:0] != 6'd0);        // tilemap flags & 0xf0
                     active = 1'b1;
@@ -344,12 +346,13 @@ module rf_video_mix
                 end
                 if (ph == 2'd3) begin
                     v[0]   <= 1'b1;
-                    dat[0] <= '{pf: pf_q, sp: sp_color, pv: pv_color,
-                                pv_op: pv_opaque, x: px};
-                    st[0]  <= '{src_pal: 16'd0, dst_pal: l_bg,
-                                src_blend: 4'd0, dst_blend: 4'd8,
-                                src_prio: 4'd0, dst_prio: 4'd0,
-                                src_bm: 3'b111};
+                    // packed structs loaded by concatenation in declaration
+                    // order (named assignment patterns are another Quartus
+                    // 17 hazard): {pf, sp, pv, pv_op, x} and
+                    // {src_pal, dst_pal, src_blend, dst_blend, src_prio,
+                    //  dst_prio, src_bm}
+                    dat[0] <= {pf_q, sp_color, pv_color, pv_opaque, px};
+                    st[0]  <= {16'd0, l_bg, 4'd0, 4'd8, 4'd0, 4'd0, 3'b111};
                     if (px == 9'd319) begin
                         drain <= 5'd24;
                         seq   <= S_DRAIN;
@@ -373,16 +376,19 @@ module rf_video_mix
     logic [15:0] p_src, p_dst;
     logic  [3:0] p_sb, p_db, q_sb, q_db;
     logic  [8:0] p_x, q_x;
-    logic        v9_1, v9_2, v9_3, v9_4, v9_5;
+    logic        v9_1, v9_2, v9_3, v9_4, v9_5, v9_6;
     logic  [7:0] sr, sg, sb, dr, dg, db;
-    // Pixels arrive every four clocks and the blend step uses its weights
-    // and x tag five clocks after arrival, so the next pixel has already
-    // overwritten p_*: the q_* copies are taken at clock four, before that.
+    // Addresses go out on clocks 1-4 after v9 (registered, so presented on
+    // 1-4), the RAM registers each and answers the clock after, so the four
+    // words are sampled on clocks 2-5 and the blend runs on 6. Pixels arrive
+    // every four clocks, so p_* is overwritten by the next pixel on clock 4:
+    // the q_* copies taken on that same edge carry this pixel's weights and
+    // x tag through to clock 6.
 
     wire v9 = v[NL];
 
     always_ff @(posedge clk) begin
-        v9_1 <= v9; v9_2 <= v9_1; v9_3 <= v9_2; v9_4 <= v9_3; v9_5 <= v9_4;
+        v9_1 <= v9; v9_2 <= v9_1; v9_3 <= v9_2; v9_4 <= v9_3; v9_5 <= v9_4; v9_6 <= v9_5;
 
         if (v9) begin
             p_src <= st[NL].src_pal;
@@ -397,10 +403,10 @@ module rf_video_mix
         else if (v9_2) pal_addr <= {p_dst[12:0], 1'b0};
         else if (v9_3) pal_addr <= {p_dst[12:0], 1'b1};
 
-        if (v9_1) sr <= pal_q[7:0];
-        if (v9_2) begin sg <= pal_q[15:8]; sb <= pal_q[7:0]; end
-        if (v9_3) dr <= pal_q[7:0];
-        if (v9_4) begin dg <= pal_q[15:8]; db <= pal_q[7:0]; q_sb <= p_sb; q_db <= p_db; q_x <= p_x; end
+        if (v9_2) sr <= pal_q[7:0];
+        if (v9_3) begin sg <= pal_q[15:8]; sb <= pal_q[7:0]; end
+        if (v9_4) begin dr <= pal_q[7:0]; q_sb <= p_sb; q_db <= p_db; q_x <= p_x; end
+        if (v9_5) begin dg <= pal_q[15:8]; db <= pal_q[7:0]; end
     end
 
     // source * src_blend + dest * dst_blend, fixed 3-bit contributions
@@ -414,8 +420,8 @@ module rf_video_mix
     endfunction
 
     always_ff @(posedge clk) begin
-        out_valid <= v9_5;
-        if (v9_5) begin
+        out_valid <= v9_6;
+        if (v9_6) begin
             out_x   <= q_x;
             out_rgb <= {chan(sr, q_sb, dr, q_db), chan(sg, q_sb, dg, q_db), chan(sb, q_sb, db, q_db)};
         end
