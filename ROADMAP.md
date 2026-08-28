@@ -497,3 +497,44 @@ stereo, MAME's mix) are the references.
 - `reference/mame/es5510.cpp` — ES5510 DSP
 - `Arcade_propcycle_MiSTer/` — Propcycle core (CPU subsystem, BRAM, SDRAM)
 - `Arcade-Raiden2_MiSTer/` — Raiden II core (self-test, UART debug)
+
+
+---
+
+## Appendix: what a second F3 game would cost (measured 2026-08-28)
+
+**Elevator Action Returns** (`elvactr`, E02) is the obvious candidate -- same
+Taito F3 board, and MAME's per-game video config is *identical* to Gunlock's
+(`{ EACTION2, extend 1, sprite_lag 2 }`, `taito_f3_v.cpp`). A MAME probe over
+2,319 frames (`tools/f3_probe.lua` pattern) says what actually differs:
+
+| Thing | Ray Force | Elevator Action Returns |
+|---|---|---|
+| Pivot / pixel layer | **never written** (the core stubs it and spends its 64 KB of BRAM on the sound RAM) | **131,072 writes, 98,304 non-zero, all 256 pages** -- fully used |
+| Sprite trails | never set | **never set** (so the RTL's omission is fine for both) |
+| Video config | extend 1, lag 2 | extend 1, lag 2 -- same |
+| Visible raster | `f3_224a`: 224 lines from line 31 | base `f3`: **232 lines from line 24** |
+| Orientation | ROT90 (TATE) | **ROT0** (horizontal) |
+| maincpu ROM | 1 MB | **2 MB** |
+| sprites / sprites_hi | 2 MB / 1 MB | **4 MB / 2 MB** |
+| tilemap / tilemap_hi | 2 MB / 1 MB | **4 MB / 2 MB** |
+| Ensoniq samples | 4 MB | 4 MB (same layout) |
+| Total download | 11.5 MB | **18.5 MB** |
+
+So the work, in order of size:
+
+1. **Restore the pivot/pixel layer.** `rtl/rf_video_pivot.sv` already exists and
+   is correct; what is gone is its 64 KB of RAM. Holding both it and the 64 KB
+   sound RAM needs 128 KB of BRAM and M10K is at 527/553 (95 %), so one of them
+   has to move to SDRAM behind a cache -- or main RAM (128 KB, ~102 M10Ks, the
+   single biggest block) does.
+2. **Re-map SDRAM for 18.5 MB** and parameterise the region bases that are
+   currently constants in `rf_prog_bus`, `rf_gfx_bus`, `rf_spr_gfx_bus` and
+   `rf_smp_bus` (e.g. `rf_smp_bus`'s `BASE = 26'h3C0000`).
+3. **Parameterise the raster** (224/31 vs 232/24) and the 2 MB program ROM
+   decode.
+4. **Per-game orientation**: the OSD's rotation default is one value today.
+
+None of it is research -- it is all known work. But it is a Taito F3 *multi-game*
+core, which is a different project from a Ray Force core, and step 1 alone is
+an architectural change to how the BRAM budget is spent.

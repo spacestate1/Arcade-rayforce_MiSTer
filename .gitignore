@@ -43,3 +43,23 @@ jtag.cdf
 sim/es5505_ref*.raw
 sim/spr_fb_ref*.txt
 sim/spr_fetched.txt
+
+# ---------------------------------------------------------------------------
+# Kept out of the published repository (2026-08-28, release prep)
+# ---------------------------------------------------------------------------
+# MAME write-stream traces: 334 MB of them, and rf_rd.tr alone is over
+# GitHub's 100 MB per-file limit. Regenerate with tools/oracle_*.lua.
+*.tr
+
+# MAME source read as the reference for this core. Not ours to redistribute,
+# and a reader does not need it -- the comments cite file and function.
+reference/
+
+# Quartus programmer / pin dumps and the generated build id
+jtag.cdf
+c5_pin_model_dump.txt
+build_id.v
+
+# MiSTer SD-card runtime artefacts written by the board, not source
+cfg/
+snap/
