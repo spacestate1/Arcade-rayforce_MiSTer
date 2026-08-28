@@ -145,6 +145,22 @@ the first frames after a reset have no buckets built yet, so the mixer
 legitimately outruns the draw and the counter would latch a permanent FAIL
 out of the boot.
 
+**NVRAM -- what is proven and what still needs a person at the cabinet.**
+The board's MiSTer supports the channel (other cores have 128-byte files in
+`/media/fat/config/nvram/`) and the deployed MRA carries the `<nvram>`
+element, but no `Ray Force.nvm` exists yet, and it cannot appear until a
+save is triggered: MiSTer only calls `arcade_nvm_save()` when the OSD is
+opened or "Save settings" is picked, and `/dev/MiSTer_cmd` has no command
+that opens the OSD (menu / osd / show_menu were all tried and ignored).
+A MAME tap on the EEPROM port (0x4A0010, the byte MAME's `case 0x04` and
+our `a[4:1] == 4'h9` both decode) settles what to expect: over a 40 s boot
+and attract the game issues **16 READ commands and no WRITE** -- so a save
+is requested only once a setting actually changes, which is correct
+behaviour and also means a plain boot will never produce a .nvm.
+**The end-to-end test is therefore: Service Mode on, change a setting,
+exit, open the OSD once, and check that `/media/fat/config/nvram/Ray
+Force.nvm` appears; then reload the core and see the setting stick.**
+
 **NVRAM.** The 93C46 settings EEPROM now loads and saves through MiSTer's
 ioctl index 254. The MRAs declare `<nvram index="254" size="128"/>` (the
 form Main_MiSTer's `mra_loader.cpp` parses: `nvram_idx` from index,
