@@ -66,6 +66,7 @@ module rayforce_video
     // unchanged, so the game runs 1.9% fast in exchange for a picture every
     // 60 Hz display holds without judder. rf_video_pipe carries the same
     // two constants for its lookahead wrap.
+    input  logic  [1:0] vis_mode,     // which F3 visarea (see below)
     input  logic        rate_60,
 
     output logic        vbl_rise,     // one pulse at the vblank interrupt line
@@ -86,13 +87,29 @@ module rayforce_video
 );
 
     // ---- counters --------------------------------------------------------
-    // V_START/V_END are the f3_224a visarea (31..254 inclusive). vcnt itself
-    // is the line-RAM index; the visible window is a crop of the 262-line
-    // raster, so vsync has to live in what is left (lines 255..261 + 0..30).
+    // vcnt IS the line-RAM index; the visible window is a crop of the
+    // 262-line raster, so vsync has to live in what is left.
+    //
+    // The crop is the ONE thing that differs between the four Taito F3
+    // machine configurations in MAME, and every F3 game uses one of them
+    // (taito_f3.cpp: the base f3 set_raw is 432x262 for all of them, and
+    // f3_224a/b/c only override set_visarea):
+    //
+    //   vis_mode 0  f3_224a  lines 31..254   224 visible   <- Ray Force
+    //   vis_mode 1  f3_224b  lines 32..255   224 visible
+    //   vis_mode 2  f3_224c  lines 24..247   224 visible
+    //   vis_mode 3  f3       lines 24..255   232 visible   <- Elevator
+    //                                                         Action Returns
+    //
+    // 0 is the default so a core with no game-config ROM behaves as before.
     localparam int H_TOTAL = 432, H_START = 46, H_END = 366;   // 320 visible
-    localparam int V_TOTAL = 262, V_START = 31, V_END = 255;   // 224 visible
+    localparam int V_TOTAL = 262;
     localparam int HS_BEG  = 388, HS_WID  = 32;
     localparam int VS_BEG  = 258, VS_WID  = 3;
+
+    wire [8:0] v_start = (vis_mode == 2'd0) ? 9'd31 :
+                         (vis_mode == 2'd1) ? 9'd32 : 9'd24;
+    wire [8:0] v_end   = (vis_mode == 2'd3) ? 9'd256 : (v_start + 9'd224);
 
     wire [8:0] v_total = rate_60 ? 9'd257 : V_TOTAL[8:0];
     wire [8:0] vs_beg  = rate_60 ? 9'd1   : VS_BEG[8:0];   // 258 wraps to 1
@@ -124,15 +141,15 @@ module rayforce_video
 
     // The vblank interrupt fires as the raster leaves the visible area.
     wire line_end = (div == 3'd7) && (hcnt == H_TOTAL - 1);
-    always_ff @(posedge clk) vbl_rise <= !reset && line_end && (vcnt == V_END - 1);
+    always_ff @(posedge clk) vbl_rise <= !reset && line_end && (vcnt == v_end - 9'd1);
 
     assign hblank = (hcnt < H_START) || (hcnt >= H_END);
-    assign vblank = (vcnt < V_START) || (vcnt >= V_END);
+    assign vblank = (vcnt < v_start) || (vcnt >= v_end);
     assign hsync  = (hcnt >= HS_BEG) && (hcnt < HS_BEG + HS_WID);
     assign vsync  = (vcnt >= vs_beg) && (vcnt < vs_beg + VS_WID[8:0]);
 
     wire [8:0] x = hcnt - H_START[8:0];   // 0..319 when visible
-    wire [8:0] y = vcnt - V_START[8:0];   // 0..223 when visible
+    wire [8:0] y = vcnt - v_start;        // 0 at the top visible line
 
     // ---- 8x8 hex font, 16 glyphs ----------------------------------------
     function automatic logic [7:0] glyph(input logic [3:0] n, input logic [2:0] row);

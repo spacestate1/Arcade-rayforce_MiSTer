@@ -602,6 +602,38 @@ logic        aud_ring_we, aud_armed;
 logic [22:0] aud_idx;
 logic [55:0] aud_ring_data;
 
+// ------------------------  GAME CONFIG  ------------------------------
+//
+// The Taito F3 board is one chipset running 35 different games, and MAME's
+// per-game differences are small enough to be data rather than RTL: the
+// visible-raster crop (four variants), the playfield "extend" bit, and the
+// sprite lag. The MRA supplies them as a single byte on ioctl index 1, the
+// way MiSTer arcade cores usually carry a board variant:
+//
+//     <rom index="1"><part>03</part></rom>     (f3, 232 lines)
+//
+//   bit [1:0]  visarea: 0 = f3_224a (Ray Force), 1 = f3_224b,
+//                       2 = f3_224c, 3 = f3
+//   bit [2]    extend   (1 = 1024x512 playfields; both Ray Force and
+//                       Elevator Action Returns are 1, and the renderer is
+//                       still hardwired to it -- reserved, not yet read)
+//   bit [4:3]  sprite lag in frames (reserved; the engine does 1 today,
+//                       MAME does 2 for both of these games)
+//
+// With no index-1 ROM the byte stays 0, which is Ray Force's configuration,
+// so every MRA written before this still means what it meant.
+// Cleared at the START of a load and latched during it, so switching to an
+// MRA that carries no config byte cannot inherit the previous game's. It
+// must NOT be cleared by the OSD's Reset, which does not re-download.
+logic [7:0] game_cfg;
+logic       hard_reset_d;
+always_ff @(posedge clk_sys) begin
+    hard_reset_d <= RESET;
+    if (RESET && !hard_reset_d) game_cfg <= 8'd0;          // a load begins
+    else if (ioctl_wr && ioctl_index == 8'd1) game_cfg <= ioctl_dout[7:0];
+end
+wire [1:0] cfg_vis = game_cfg[1:0];
+
 // ---------------------------  NVRAM  ---------------------------------
 //
 // The 93C46 settings EEPROM is the game's only persistent store: the
@@ -921,6 +953,7 @@ rayforce_video video
     .v_pal_addr(),
     .v_pal_q(16'd0),
 
+    .vis_mode(cfg_vis),
     .rate_60(rate_60),
     .vbl_rise(vbl_rise),
     .div_o(vid_div), .hcnt_o(vid_hcnt), .vcnt_o(vid_vcnt),
