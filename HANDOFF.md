@@ -102,6 +102,47 @@ committed (no commit was asked for -- the tree is left ready to review).
 | B15 | Resource work: the 56-bit debug ring 4096 -> 2048 entries (24 -> 12 M10Ks, M10K being the binding resource at 539/553) and the sprite record store 8192 -> 12288 rows per bank in MLABs, which is what the board's measured 8296-row peak overran | benches; the fit report's M10K and memory-LAB counts | **28113056: `GATE PASS: timing met` -- the FIRST fully clean build since B7. Worst slack +0.048 ns; the HDMI PLL clock that had missed by 0.04-0.16 ns in every build from B10 on is met, which says that miss was fitter congestion, not a real path. M10K 527/553 (was 539), ALMs 88 %, block memory 73 %. On the board: every page row PASS; the audio ring (2048 samples now) correlates +0.992 with `model95.wav` at ratio 1.0** |
 | P | Small missing parts: Pause (in B4), gunlock/rayforcej MRAs (written), NVRAM (design note only) | build + board | Pause + MRAs done; NVRAM see "Missing parts" |
 
+### Elevator Action Returns: first boot on the core (2026-08-28, `28133520`)
+
+The core is now a Taito F3 core that loads a second game. Build `28133520`
+carries the universal 18.5 MB SDRAM map and the per-game config byte, timing
+met (+0.219 ns), and **Ray Force still passes all 21 self-test rows on it** --
+including `ROM BYTES 01280000` (the padded total) and the unchanged
+`ROM CHECKSUM 77E1C279`, which is the regression that mattered.
+
+`releases/Elevator Action Returns.mra` loads on it. What the board says:
+
+| Row | Value | Meaning |
+|---|---|---|
+| ROM BYTES | `01280000` PASS | the download is exactly the universal map |
+| ROM CHECKSUM | `D041363D` PASS | **byte-perfect** -- matches `tools/rf_stream_sum.py` computed offline from the MRA |
+| SDRAM BIST | `399D4BCA` PASS | the 68020's program ROM reads back correctly through the SDRAM path |
+| SMP BIST | `F5D3....` PASS | the sample ROM fetch path returns the right bytes (`52DDF5D3` low half) |
+| PLAYFIELD / SPRITE / LINE RAM / TEXT | PASS | the CPU is executing and writing video RAM |
+| **IRQ2 ACK/64FRM** | `00000000` **FAIL** | **no vblank interrupt is ever acknowledged** |
+| FETCH : PIX NZ, TILE NZ | 0 FAIL | so nothing is being rendered |
+| SND ES WR : RUN | WAIT | the sound CPU is never released, which follows |
+| PIVOT WR | `0001....` FAIL | exactly **one** non-zero pivot write -- the same single transient longword MAME shows, so the stub is behaving as measured |
+
+So the loading half is done and proven, and the game is stuck before it
+starts drawing. Everything the ROMs can prove about themselves passes; what
+fails is all downstream of the CPU never taking IRQ2.
+
+**The next step is the method that settled this for Ray Force in Phase 0/1:**
+run the MAME write-stream oracle for `elvactr`, capture the board's write
+ring (`UART Debug = Write Ring`), and diff. That says exactly which write the
+board diverges on, which is far better evidence than guessing between the
+candidates (the interrupt enable path, the EEPROM contents EAR boots against,
+or a sound-board handshake it waits on where Ray Force times out). The
+`WRITE HASH` row already reports `93368F3C` for this game -- a real
+measurement, not yet a verified expectation, since `exp_hash` is 0 for
+anything but Ray Force.
+
+Note for whoever runs it: MiSTer keeps arcade settings per MRA name, so
+Elevator Action Returns gets its own `/media/fat/config/Elevator Action
+Returns.CFG` and starts from defaults (self test ON, TATE rotation) rather
+than inheriting Ray Force's.
+
 ### Polish, input lag and the analog stick (2026-08-28, B16 `28121351`)
 
 Three OSD options added: **Stereo Mix** (None/25/50/100 % -- `AUDIO_MIX`,
