@@ -377,7 +377,7 @@ module rf_main
         if (reset) begin
             coin_word0 <= 16'd0; coin_word1 <= 16'd0;
             {ee_cs, ee_sk, ee_di} <= 3'b000;
-        end else if (cpu_wr && sel_ctrl && !clkena) begin
+        end else if (cpu_wr && sel_ctrl) begin
             case (a[4:1])
                 4'h2: coin_word0 <= cpu_dout;               // 4A0004, upper half
                 4'hA: coin_word1 <= cpu_dout;               // 4A0014, upper half
@@ -413,7 +413,7 @@ module rf_main
                 c0[ci] <= 16'd0;
                 c1[ci] <= 16'd0;
             end
-        end else if (cpu_wr && sel_vctrl && !clkena) begin
+        end else if (cpu_wr && sel_vctrl) begin
             if (!a[4]) begin
                 if (be[1]) c0[a[3:1]][15:8] <= cpu_dout[15:8];
                 if (be[0]) c0[a[3:1]][7:0]  <= cpu_dout[7:0];
@@ -428,34 +428,19 @@ module rf_main
     wire [15:0] ram_q, pal_q, spr_q, pf_q, pfx_q, text_q, char_q,
                 line_q, pivot_q, dpram_q;
 
-    // Every CPU-side write is qualified with !clkena so it happens ONCE per
-    // bus cycle, on the address-setup cycle -- the same rule rf_sound_main
-    // has always used (`ram_wren = cpu_wr && sel_ram && !clkena`). Without
-    // it, busstate stays 2'b11 for both cycles of a 2-cycle bus op and the
-    // write is performed twice, the second time on the clock-enable edge
-    // where TG68K is already moving its outputs to the next access. The
-    // write counters below use the opposite qualifier (`cpu_wr && clkena`)
-    // to count once per bus cycle, which is what proved the condition spans
-    // more than one cycle.
-    //
-    // Ray Force never noticed. Elevator Action Returns' power-on self test
-    // walks memory writing a pattern, reading it straight back and comparing
-    // -- it noticed immediately, and stopped in its own "WORK RAM ERROR"
-    // handler (HANDOFF.md, 2026-08-28).
-
     // CPU-only memories: simple dual port is enough.
     rf_bram_be #(.AW(16)) u_ram (
         .clk(clk), .waddr(a[16:1]), .wdata(cpu_dout),
-        .wren(cpu_wr && sel_ram && !clkena), .be(be), .raddr(a[16:1]), .q(ram_q));
+        .wren(cpu_wr && sel_ram), .be(be), .raddr(a[16:1]), .q(ram_q));
 
     rf_bram_be #(.AW(13)) u_pfx (
         .clk(clk), .waddr(a[13:1]), .wdata(cpu_dout),
-        .wren(cpu_wr && sel_pfx && !clkena), .be(be), .raddr(a[13:1]), .q(pfx_q));
+        .wren(cpu_wr && sel_pfx), .be(be), .raddr(a[13:1]), .q(pfx_q));
 
     // MB8421: this CPU on port A, the sound CPU on port B (byte lanes)
     rf_bram_tdp #(.AW(10)) u_dpram (
         .clk(clk),
-        .a_addr(a[10:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_dpram && !clkena),
+        .a_addr(a[10:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_dpram),
         .a_be(be), .a_q(dpram_q),
         .b_addr(snd_dp_addr), .b_wdata(snd_dp_wdata), .b_wren(snd_dp_wren),
         .b_be(snd_dp_be), .b_q(snd_dp_q));
@@ -474,42 +459,42 @@ module rf_main
     // Video-visible memories: true dual port, CPU on A, renderer on B.
     rf_bram_tdp #(.AW(14)) u_pal (
         .clk(clk),
-        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pal && !clkena),
+        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pal),
         .a_be(be), .a_q(pal_q),
         .b_addr(v_pal_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_pal_q));
 
     rf_bram_tdp #(.AW(15)) u_spr (
         .clk(clk),
-        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_spr && !clkena),
+        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_spr),
         .a_be(be), .a_q(spr_q),
         .b_addr(v_spr_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_spr_q));
 
     rf_bram_tdp #(.AW(14)) u_pf (
         .clk(clk),
-        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pf && !clkena),
+        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pf),
         .a_be(be), .a_q(pf_q),
         .b_addr(v_pf_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_pf_q));
 
     rf_bram_tdp #(.AW(12)) u_text (
         .clk(clk),
-        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_text && !clkena),
+        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_text),
         .a_be(be), .a_q(text_q),
         .b_addr(v_text_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_text_q));
 
     rf_bram_tdp #(.AW(12)) u_char (
         .clk(clk),
-        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_char && !clkena),
+        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_char),
         .a_be(be), .a_q(char_q),
         .b_addr(v_char_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_char_q));
 
     rf_bram_tdp #(.AW(15)) u_line (
         .clk(clk),
-        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_line && !clkena),
+        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_line),
         .a_be(be), .a_q(line_q),
         .b_addr(v_line_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_line_q));
