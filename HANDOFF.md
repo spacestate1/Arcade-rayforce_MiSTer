@@ -128,15 +128,31 @@ So the loading half is done and proven, and the game is stuck before it
 starts drawing. Everything the ROMs can prove about themselves passes; what
 fails is all downstream of the CPU never taking IRQ2.
 
-**The next step is the method that settled this for Ray Force in Phase 0/1:**
-run the MAME write-stream oracle for `elvactr`, capture the board's write
-ring (`UART Debug = Write Ring`), and diff. That says exactly which write the
-board diverges on, which is far better evidence than guessing between the
-candidates (the interrupt enable path, the EEPROM contents EAR boots against,
-or a sound-board handshake it waits on where Ray Force times out). The
-`WRITE HASH` row already reports `93368F3C` for this game -- a real
-measurement, not yet a verified expectation, since `exp_hash` is 0 for
-anything but Ray Force.
+**The CPU is not the problem -- that is now measured, not assumed.**
+`tools/oracle_f3writes.lua` (new: the Phase 0/1 write-stream oracle, for any
+F3 game, emitting the same `WR addr data szN` lines `rf_write_compare.py`
+parses) was validated by reproducing Ray Force's known hash `0x10620931`
+exactly, first lines matching the original `rf_acc.tr`. Run on `elvactr` it
+gives **`0x93368F3C` -- precisely what the board reports**. So the 68020 in
+this core executes Elevator Action Returns' first 4096 bus writes exactly as
+MAME does, and that row is now a real expectation rather than report-only.
+
+What is left is downstream of that: no IRQ2 acknowledge ever happens. Note
+that MAME's `f3_timer_control_w` (0x4C0000, where this game writes 0x278B
+and Ray Force writes 0) is an explicit TODO in MAME too -- "several games
+configure timer-based pseudo-hblank int5 here at POST" -- and MAME runs the
+game without it, so that register is not the cause either.
+
+**The next step is to see where the board diverges AFTER those 4096 writes:**
+capture the board's write ring (`UART Debug = Write Ring`) and diff it
+against the oracle's stream past that point. One obstacle to clear first:
+setting the UART mode for this game did not take. Both MRAs declare
+`<rbf>Rayforce</rbf>`, so it is not obvious whether MiSTer keys the saved
+settings on the core name (`Rayforce.CFG`, which `tools/setcfg.py` writes and
+which works for Ray Force) or on the MRA name (`Elevator Action Returns.CFG`);
+writing either one and reloading left the UART streaming the self-test page.
+Worth settling from Main_MiSTer's `user_io_create_config_name` rather than by
+trial.
 
 Note for whoever runs it: MiSTer keeps arcade settings per MRA name, so
 Elevator Action Returns gets its own `/media/fat/config/Elevator Action

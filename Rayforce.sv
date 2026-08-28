@@ -671,12 +671,13 @@ always_comb begin
             exp_smp   = 32'hB86C4865;
         end
         2'd1: begin                                    // Elevator Action Returns
-            // Everything derivable from the ROMs is a real expectation
-            // (tools/rf_stream_sum.py over the MRA); the CPU write-stream
-            // hash is not -- it needs the MAME write oracle run for this
-            // game -- so it stays 0 and that row reports what it finds.
+            // All five are real expectations now. The first four come from
+            // tools/rf_stream_sum.py over the MRA; the write hash comes from
+            // tools/oracle_f3writes.lua, and the board already reports
+            // exactly it -- so the 68020 executes this game's first 4096 bus
+            // writes the same way MAME does.
             exp_bytes = 32'h01280000; exp_sum  = 32'hD041363D;
-            exp_bist  = 32'h399D4BCA; exp_hash = 32'h00000000;
+            exp_bist  = 32'h399D4BCA; exp_hash = 32'h93368F3C;
             exp_smp   = 32'h52DDF5D3;
         end
         default: begin                                 // not yet measured
