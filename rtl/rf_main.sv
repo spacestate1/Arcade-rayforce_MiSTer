@@ -579,11 +579,18 @@ module rf_main
     // freeze while the CPU ran on. It is circular now, so a capture always
     // shows the LAST 2048 writes, which is what you want when a game has
     // parked somewhere and you need to know what it did just before.
-    wire wr_frozen = 1'b0;
+    // ...but the write COUNT and HASH must still stop at 4096: that pair is
+    // the Phase 1 proof, compared against a fixed number from MAME, and a
+    // hash that keeps folding is just a moving target. So the freeze stays
+    // on the counters and comes off the ring -- two things that used to be
+    // one signal (and letting the ring un-freeze the hash cost one build
+    // and a FAIL on Ray Force's WRITE HASH row to notice).
+    wire wr_frozen = wr_count[12];               // 4096 reached: counters stop
     wire ring_wrapped = |wr_count[31:11];        // more than the 2048 held
     assign ring_full = ring_ext_sel ? snd_frozen : ring_wrapped;
 
-    wire do_write = clkena && (busstate == 2'b11) && !nWr && !wr_frozen;
+    wire bus_write = clkena && (busstate == 2'b11) && !nWr;   // every write
+    wire do_write  = bus_write && !wr_frozen;                 // counted ones
 
     wire [15:0] wdat = {nUDS ? 8'h00 : cpu_dout[15:8],
                         nLDS ? 8'h00 : cpu_dout[7:0]};
@@ -604,7 +611,7 @@ module rf_main
         if (reset) snd_wr_count <= 13'd0;
         else if (ring_ext_sel && ring_ext_we && !snd_frozen) snd_wr_count <= snd_wr_count + 13'd1;
     end
-    wire        ring_adv  = ring_ext_sel ? (ring_ext_we && !snd_frozen) : do_write;
+    wire        ring_adv  = ring_ext_sel ? (ring_ext_we && !snd_frozen) : bus_write;
     wire [55:0] ring_wdat = ring_ext_sel ? ring_ext_data
                                          : {~nUDS, ~nLDS, a[23:1], 15'd0, wdat};
 
