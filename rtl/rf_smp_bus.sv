@@ -27,7 +27,7 @@ module rf_smp_bus
     output logic        ch_req,
     input  logic        ch_ready
 );
-    localparam logic [26:1] BASE = 26'h3C0000;
+    localparam logic [26:1] BASE = 26'h740000;      // byte 0xE80000
 
     /* verilator lint_off PROCASSINIT */
     logic done_t = 1'b0;

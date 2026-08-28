@@ -72,10 +72,10 @@ int main(int argc, char** argv) {
     const char* dir = argc > 1 ? argv[1] : "dump";
     const char* outp = argc > 2 ? argv[2] : "fetched.txt";
 
-    mem.assign(0x800000, 0);
+    mem.assign(0x1280000, 0);
     struct { const char* n; uint32_t off; } regs[] = {
-        {"rgn_sprites.bin",    0x180000}, {"rgn_sprites_hi.bin", 0x380000},
-        {"rgn_tilemap.bin",    0x480000}, {"rgn_tilemap_hi.bin", 0x680000}};
+        {"rgn_sprites.bin",    0x280000}, {"rgn_sprites_hi.bin", 0x680000},
+        {"rgn_tilemap.bin",    0x880000}, {"rgn_tilemap_hi.bin", 0xC80000}};
     char p[512];
     for (auto& r : regs) {
         snprintf(p, sizeof p, "%s/%s", dir, r.n);

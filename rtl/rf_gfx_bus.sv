@@ -74,8 +74,8 @@ module rf_gfx_bus
     // Word addresses of the two regions in the flat SDRAM map (the MRA
     // stream order IS the map): tilemap at byte 0x480000, tilemap_hi at
     // 0x680000.
-    localparam logic [26:1] BASE_LO = 26'h240000;
-    localparam logic [26:1] BASE_HI = 26'h340000;
+    localparam logic [26:1] BASE_LO = 26'h440000;   // byte 0x880000
+    localparam logic [26:1] BASE_HI = 26'h640000;   // byte 0xC80000
 
     // ---- ram-domain completion capture ----------------------------------
     /* verilator lint_off PROCASSINIT */

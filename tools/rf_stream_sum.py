@@ -24,6 +24,11 @@ by_crc = {i.CRC & 0xFFFFFFFF: i for i in z.infolist()}
 
 
 def part_bytes(el):
+    # a padding part carries inline hex and a repeat count instead of a crc:
+    #   <part repeat="1048576">00</part>
+    if el.get("crc") is None:
+        data = bytes(int(b, 16) for b in (el.text or "").split())
+        return data * int(el.get("repeat", "1"))
     c = int(el.get("crc"), 16)
     return z.read(by_crc[c])
 

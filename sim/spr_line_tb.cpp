@@ -62,9 +62,9 @@ int main(int argc, char** argv) {
     { auto b = load(dir + pre); sram.resize(b.size() / 2);
       for (size_t i = 0; i < sram.size(); i++) sram[i] = (b[2 * i] << 8) | b[2 * i + 1]; }
 
-    mem.assign(0x800000, 0);
+    mem.assign(0x1280000, 0);
     struct { const char* n; uint32_t off; } regs[] = {
-        {"rgn_sprites.bin", 0x180000}, {"rgn_sprites_hi.bin", 0x380000}};
+        {"rgn_sprites.bin", 0x280000}, {"rgn_sprites_hi.bin", 0x680000}};
     for (auto& r : regs) { auto v = load(dir + "/" + r.n); memcpy(&mem[r.off], v.data(), v.size()); }
 
     // reference: fb[sy][46..365] and per-line usage

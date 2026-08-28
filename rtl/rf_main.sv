@@ -234,8 +234,11 @@ module rf_main
     // ---- address decode --------------------------------------------------
     wire [23:0] a = cpu_addr[23:0];
 
-    wire sel_rom   = (a[23:20] == 4'h0);                            // 000000-0FFFFF
-    wire sel_romhi = (a[23:21] == 3'b000) && a[20];                 // 100000-1FFFFF
+    // The program ROM window is the full 2 MB the F3 map gives it: Ray Force
+    // populates 1 MB and the MRA pads the rest with zeros, which reads the
+    // same as the unpopulated window did. Elevator Action Returns fills it.
+    wire sel_rom   = (a[23:21] == 3'b000);                          // 000000-1FFFFF
+    wire sel_romhi = 1'b0;                                          // (folded into sel_rom)
     wire sel_ram   = (a[23:18] == 6'b010000);                       // 400000-43FFFF (+mirror)
     wire sel_pal   = (a[23:15] == 9'b010001000);                    // 440000-447FFF
     wire sel_ctrl  = (a[23:16] == 8'h4A);

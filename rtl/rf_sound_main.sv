@@ -241,7 +241,7 @@ module rf_sound_main
             case (bst)
                 // out of reset: fetch ROM words 0-3 first
                 B_HOLD: begin
-                    prog_addr <= {2'b01, 17'd0, boot_i};       // SDRAM 0x100000 + 2*i
+                    prog_addr <= {2'b10, 17'd0, boot_i};       // SDRAM 0x200000 + 2*i
                     prog_req  <= 1'b1;
                     rom_wait  <= 1'b1;
                     bst       <= B_FETCH;
@@ -267,7 +267,7 @@ module rf_sound_main
                         end
                     end else if (!clkena && !pause && spd == 2'(SPEED_DIV - 1)) begin
                         if (sel_rom && cpu_rd) begin
-                            prog_addr <= {2'b01, a[19:1]};      // SDRAM 0x100000 + offset
+                            prog_addr <= {2'b10, a[19:1]};      // SDRAM 0x200000 + offset
                             prog_req  <= 1'b1;
                             rom_wait  <= 1'b1;
                         end else if (sel_es && cpu_rd && !es_rd_valid) begin

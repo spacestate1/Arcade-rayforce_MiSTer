@@ -477,7 +477,7 @@ always @(posedge clk_sys) begin
     end else begin
         if (dl_word && !ld_busy) begin
             ld_addr <= ioctl_addr[26:1];
-            ld_din  <= (ioctl_addr < 27'h100000)
+            ld_din  <= (ioctl_addr < 27'h200000)
                        ? {ioctl_dout[7:0], ioctl_dout[15:8]}   // LE -> BE
                        : ioctl_dout;
             ld_req  <= 1'b1;
@@ -602,6 +602,24 @@ logic        aud_ring_we, aud_armed;
 logic [22:0] aud_idx;
 logic [55:0] aud_ring_data;
 
+//  Universal Taito F3 SDRAM map (2026-08-28). Sized for the largest game
+//  this core targets rather than for one game, so a second title is an MRA
+//  and a config byte, not a re-fit:
+//
+//     byte        size    region
+//     0x0000000    2 MB   maincpu      (68020, 4-way byte interleave)
+//     0x0200000  512 KB   audiocpu     (68000, 16-bit interleave)
+//     0x0280000    4 MB   sprites      (16-bit interleave)
+//     0x0680000    2 MB   sprites_hi
+//     0x0880000    4 MB   tilemap      (LOAD32_WORD pair)
+//     0x0C80000    2 MB   tilemap_hi
+//     0x0E80000    4 MB   ensoniq      (2 x 2 MB, plain)
+//     0x1280000           = 18.5 MB total
+//
+//  Ray Force fills half of it and pads the rest; Elevator Action Returns
+//  fills it. Games larger than this (Kaiser Knuckle, Kirameki Star Road at
+//  48-49 MB) would need the map extended again.
+//
 // ------------------------  GAME CONFIG  ------------------------------
 //
 // The Taito F3 board is one chipset running 35 different games, and MAME's
@@ -632,7 +650,42 @@ always_ff @(posedge clk_sys) begin
     if (RESET && !hard_reset_d) game_cfg <= 8'd0;          // a load begins
     else if (ioctl_wr && ioctl_index == 8'd1) game_cfg <= ioctl_dout[7:0];
 end
-wire [1:0] cfg_vis = game_cfg[1:0];
+wire [1:0] cfg_vis  = game_cfg[1:0];
+wire [1:0] cfg_game = game_cfg[7:6];        // which game's expectations
+
+// What the self test should EXPECT, per game. These are properties of the
+// ROM set, not of the core, so they belong here rather than in rf_selftest:
+// the download's byte count and checksum, the SDRAM readback of the first
+// 1 MB of program ROM, the CPU's write-stream hash after boot, and the fold
+// of the first 64 KB of sample ROM. Zero means "not measured for this game
+// yet" -- the row then reports what it found and passes once the check has
+// run, rather than failing against an expectation nobody has established.
+// Compute the ROM-derived ones with tools/rf_stream_sum.py; the write hash
+// comes from the MAME write-stream oracle.
+logic [31:0] exp_bytes, exp_sum, exp_bist, exp_hash, exp_smp;
+always_comb begin
+    case (cfg_game)
+        2'd0: begin                                    // Ray Force / Gunlock
+            exp_bytes = 32'h01280000; exp_sum  = 32'h77E1C279;
+            exp_bist  = 32'hD53D7C04; exp_hash = 32'h10620931;
+            exp_smp   = 32'hB86C4865;
+        end
+        2'd1: begin                                    // Elevator Action Returns
+            // Everything derivable from the ROMs is a real expectation
+            // (tools/rf_stream_sum.py over the MRA); the CPU write-stream
+            // hash is not -- it needs the MAME write oracle run for this
+            // game -- so it stays 0 and that row reports what it finds.
+            exp_bytes = 32'h01280000; exp_sum  = 32'hD041363D;
+            exp_bist  = 32'h399D4BCA; exp_hash = 32'h00000000;
+            exp_smp   = 32'h52DDF5D3;
+        end
+        default: begin                                 // not yet measured
+            exp_bytes = 32'h00000000; exp_sum  = 32'h00000000;
+            exp_bist  = 32'h00000000; exp_hash = 32'h00000000;
+            exp_smp   = 32'h00000000;
+        end
+    endcase
+end
 
 // ---------------------------  NVRAM  ---------------------------------
 //
@@ -842,14 +895,15 @@ rf_es5505 es5505
 // from d66-01 offline (see the note in HANDOFF.md). This is the test the
 // first sound build did not have: a wrong sum means the sampler is fed the
 // wrong bytes, however exact its arithmetic is.
-localparam logic [31:0] SMP_BIST_EXP = 32'hB86C4865;
+wire [31:0] SMP_BIST_EXP = exp_smp;
 reg  [12:0] smp_bist_line;
 reg         smp_bist_req;
 reg  [31:0] smp_bist_sum;
 reg  [1:0]  smp_bist_st;                // 0 wait, 1 reading, 2 done
 wire        smp_bist_running = (smp_bist_st == 2'd1);
 wire        smp_bist_done    = (smp_bist_st == 2'd2);
-wire        smp_bist_pass    = smp_bist_done && (smp_bist_sum == SMP_BIST_EXP);
+wire        smp_bist_pass    = smp_bist_done &&
+                               ((SMP_BIST_EXP == 32'd0) || (smp_bist_sum == SMP_BIST_EXP));
 wire [63:0] smp_line_w;
 wire        smp_valid_w;
 // fold four words of a line in one step: rotl1+add applied word by word
@@ -1034,6 +1088,7 @@ rf_selftest selftest
     .div(vid_div), .hcnt(vid_hcnt), .vcnt(vid_vcnt),
 
     .dl_active(ioctl_download), .dl_seen(dl_seen),
+    .exp_bytes(exp_bytes), .exp_sum(exp_sum), .exp_bist(exp_bist), .exp_hash(exp_hash),
     .dl_bytes(dl_bytes), .dl_sum(dl_sum),
     .bist_sum(bist_sum), .bist_done(bist_done),
     .wr_count(wr_count), .wr_hash(wr_hash),

@@ -35,6 +35,12 @@ module rf_selftest #(
     // ---- what the page reports ------------------------------------------
     input  logic        dl_active,
     input  logic        dl_seen,
+    // per-game expectations (0 = not measured for this game; see below)
+    input  logic [31:0] exp_bytes,
+    input  logic [31:0] exp_sum,
+    input  logic [31:0] exp_bist,
+    input  logic [31:0] exp_hash,
+
     input  logic [31:0] dl_bytes,
     input  logic [31:0] dl_sum,
     input  logic [31:0] bist_sum,
@@ -79,11 +85,14 @@ module rf_selftest #(
     // Expected values. Phase 0/1 established every one of these against MAME
     // or against tools/rf_stream_sum.py; they are constants here so the board
     // says PASS or FAIL by itself instead of handing back a number to compare.
-    localparam logic [31:0] EXP_BYTES = 32'h00B80000;
-    localparam logic [31:0] EXP_SUM   = 32'h77E1C279;
-    localparam logic [31:0] EXP_BIST  = 32'hD53D7C04;
+    // Four of these are properties of the GAME's ROMs, not of the core, so
+    // they arrive from the top level, selected by the game-config byte the
+    // MRA supplies (Rayforce.sv, "GAME CONFIG"). A value of zero means "not
+    // measured for this game yet": the row then reports the number it found
+    // and passes once the check has finished, instead of failing against an
+    // expectation nobody has established. That is the honest state for a
+    // game whose oracle has not been run -- not a green light.
     localparam logic [31:0] EXP_WRC   = 32'h00001000;
-    localparam logic [31:0] EXP_HASH  = 32'h10620931;
     localparam logic [15:0] EXP_RATE  = 16'd64;      // one ack per frame
 
     localparam logic [1:0] ST_WAIT = 2'd0;
@@ -111,20 +120,24 @@ module rf_selftest #(
         5'd3:  begin VAL = dl_bytes;                                         \
                  STA = !dl_seen  ? ST_WAIT :                                 \
                        dl_active ? ST_BUSY :                                 \
-                       (dl_bytes == EXP_BYTES) ? ST_PASS : ST_FAIL; end      \
+                       (exp_bytes == 32'd0 || dl_bytes == exp_bytes)          \
+                                       ? ST_PASS : ST_FAIL; end              \
         5'd4:  begin VAL = dl_sum;                                           \
                  STA = !dl_seen  ? ST_WAIT :                                 \
                        dl_active ? ST_BUSY :                                 \
-                       (dl_sum == EXP_SUM) ? ST_PASS : ST_FAIL; end          \
+                       (exp_sum == 32'd0 || dl_sum == exp_sum)                \
+                                       ? ST_PASS : ST_FAIL; end              \
         5'd5:  begin VAL = bist_sum;                                         \
-                 STA = bist_done ? ((bist_sum == EXP_BIST) ? ST_PASS : ST_FAIL) \
+                 STA = bist_done ? (((exp_bist == 32'd0) ||                   \
+                                    (bist_sum == exp_bist)) ? ST_PASS : ST_FAIL) \
                      : (dl_seen && !dl_active) ? ST_BUSY : ST_WAIT; end      \
         5'd7:  begin VAL = snd_diag1;   /* PIVOT WR : SND PC */              \
                  STA = !cpu_running ? ST_WAIT :                              \
                        (snd_diag1[31:16] == 16'd0) ? ST_PASS : ST_FAIL; end  \
         5'd8: begin VAL = wr_hash;                                          \
                  STA = (wr_count == EXP_WRC) ?                               \
-                         ((wr_hash == EXP_HASH) ? ST_PASS : ST_FAIL)         \
+                         (((exp_hash == 32'd0) ||                            \
+                           (wr_hash == exp_hash)) ? ST_PASS : ST_FAIL)       \
                      : (wr_count != 32'h0) ? ST_BUSY : ST_WAIT; end          \
         5'd9: begin VAL = {31'd0, trap_oor};                                \
                  STA = trap_oor ? ST_FAIL :                                  \

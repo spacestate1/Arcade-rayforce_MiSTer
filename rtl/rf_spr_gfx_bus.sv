@@ -86,8 +86,8 @@ module rf_spr_gfx_bus
 
     // Word addresses in the flat SDRAM map: sprites at byte 0x180000,
     // sprites_hi at byte 0x380000 (word = byte >> 1).
-    localparam logic [26:1] BASE_LO = 26'h0C0000;
-    localparam logic [26:1] BASE_HI = 26'h1C0000;
+    localparam logic [26:1] BASE_LO = 26'h140000;   // byte 0x280000
+    localparam logic [26:1] BASE_HI = 26'h340000;   // byte 0x680000
 
     // ---- ram-domain completion capture ----------------------------------
     /* verilator lint_off PROCASSINIT */

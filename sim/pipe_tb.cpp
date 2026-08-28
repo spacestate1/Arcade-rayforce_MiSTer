@@ -68,10 +68,10 @@ int main(int argc, char** argv) {
     int rate60 = argc > 6 ? atoi(argv[6]) : 0;       // 1 = the 257-line 60 Hz frame
 
     char pre[64]; snprintf(pre, sizeof pre, "/f3_%05d_", frame);
-    mem.assign(0x800000, 0);
+    mem.assign(0x1280000, 0);
     struct { const char* n; uint32_t off; } regs[] = {
-        {"rgn_tilemap.bin", 0x480000}, {"rgn_tilemap_hi.bin", 0x680000},
-        {"rgn_sprites.bin", 0x180000}, {"rgn_sprites_hi.bin", 0x380000}};
+        {"rgn_tilemap.bin", 0x880000}, {"rgn_tilemap_hi.bin", 0xC80000},
+        {"rgn_sprites.bin", 0x280000}, {"rgn_sprites_hi.bin", 0x680000}};
     for (auto& r : regs) { auto v = load(dir + "/" + r.n); memcpy(&mem[r.off], v.data(), v.size()); }
     lram   = be16(load(dir + pre + "line_ram.bin"));
     pram   = be16(load(dir + pre + "pf_ram.bin"));
