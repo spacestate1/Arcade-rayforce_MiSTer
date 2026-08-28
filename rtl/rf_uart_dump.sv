@@ -16,9 +16,9 @@ module rf_uart_dump
     input  logic        clk,          // 53.372 MHz
     input  logic        reset,
 
-    input  logic [11:0] ring_wptr,    // entries valid: 0 .. ring_wptr-1
+    input  logic [10:0] ring_wptr,    // entries valid: 0 .. ring_wptr-1
     input  logic        ring_full,    // wptr wrapped: ALL 4096 entries valid
-    output logic [11:0] ring_raddr,
+    output logic [10:0] ring_raddr,
     input  logic [55:0] ring_rdata,   // {UDS, LDS, addr[23:1], pad, data[15:0]}
     input  logic [31:0] wr_hash,
 
@@ -79,7 +79,7 @@ module rf_uart_dump
     typedef enum logic [1:0] { L_HDR, L_ENTRY } line_t;
     line_t       line_kind;
     logic [4:0]  pos;
-    logic [11:0] idx;
+    logic [10:0] idx;
 
     // header:  "=" "=" "=" cnt[4] " " hash[8] "\n"          (17 chars)
     // entry :  "W" " " addr[6] " " data[4] " " lanes "\n"   (15 chars)
@@ -89,7 +89,7 @@ module rf_uart_dump
         if (line_kind == L_HDR) begin
             case (pos)
                 0,1,2:  ch = "=";
-                3:      ch = hexc(ring_wptr[11:8]);
+                3:      ch = hexc({1'b0, ring_wptr[10:8]});
                 4:      ch = hexc(ring_wptr[7:4]);
                 5:      ch = hexc(ring_wptr[3:0]);
                 6:      ch = " ";
@@ -134,10 +134,10 @@ module rf_uart_dump
                     if (line_kind == L_HDR) begin
                         idx       <= '0;
                         line_kind <= (ring_wptr == 0 && !ring_full) ? L_HDR : L_ENTRY;
-                    end else if (idx == ring_wptr - 12'd1) begin
+                    end else if (idx == ring_wptr - 11'd1) begin
                         line_kind <= L_HDR;
                     end else begin
-                        idx <= idx + 12'd1;
+                        idx <= idx + 11'd1;
                     end
                 end else pos <= pos + 5'd1;
             end

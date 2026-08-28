@@ -4,14 +4,14 @@
     .venv/bin/python3 tools/rf_uart.py -t 12 -o snd_ring.log   # UART Debug = Sound Ring
     python3 tools/rf_snd_ring_check.py snd_ring.log dump/en3/en_writes.txt
 
-The ring holds the last 4096 chip-region writes of the FPGA's sound 68000
+The ring holds the last 2048 chip-region writes (4096 before B15) of the FPGA's sound 68000
 (ES5505, bank, volume, ES5510 host, DUART -- the same set the oracle taps)
 and rf_uart_dump prints it in a loop, so a capture starts mid-pass; each
 `===` header starts a full pass. MAME's stream is the whole run from reset.
 
 The order of writes within a frame depends on when the DUART interrupt
 lands relative to the main loop, and TG68K.C is not cycle-identical to
-MAME's 68000, so an exact 4096-long substring match is the ideal and a long
+MAME's 68000, so an exact full-pass substring match is the ideal and a long
 common run is the realistic proof. This finds, for each complete pass, the
 longest run of consecutive ring entries that appears in order in MAME's
 stream, and where. A run of thousands means the program runs; a run of a

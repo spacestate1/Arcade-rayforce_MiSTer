@@ -3,7 +3,7 @@
 
 rf_audio_ring.py answers "does the board play what the model computes at the
 same moment" by correlating at one place. This answers the wider question
-when that says no: does the board's 137 ms occur ANYWHERE in the reference,
+when that says no: does the board's capture occur ANYWHERE in the reference,
 at any playback rate, and if it is not in the mix, which ROM sample is it?
 
     python3 tools/rf_audio_match.py audio_ring.log \
@@ -17,9 +17,10 @@ signed 8-bit samples (the model puts the byte in the high byte of the word).
 Method: normalized cross-correlation (NCC) at EVERY lag, by FFT, with the
 reference's sliding mean and energy removed so silence and level do not
 matter. Repeated with the capture resampled by a set of rate ratios, so a
-sample played at the wrong pitch still lands. Noise floor: 4096 samples
-against N positions gives max |NCC| ~ sqrt(2 ln N / 4096) ~ 0.09 for a 95 s
-reference; multiplied over the ratio scan, anything under ~0.15 is chance.
+sample played at the wrong pitch still lands. Noise floor: an M-sample
+capture against N positions gives max |NCC| ~ sqrt(2 ln N / M), i.e. ~0.09
+for 4096 samples and ~0.13 for 2048 against a 95 s reference; over the
+ratio scan, anything under ~0.2 is chance.
 A real match at the right pitch is > 0.5; a right-sample-wrong-filter match
 is 0.3-0.5 and peaks sharply at one ratio.
 """
@@ -54,12 +55,13 @@ def load_capture(path):
         if m:
             entries.append((ln, int(m.group(1), 16) >> 1, int(m.group(2), 16)))
     for h in headers:
-        seg = [e for e in entries if h < e[0] <= h + 4200][:4096]
-        if len(seg) == 4096:
+        nxt = min([x for x in headers if x > h], default=10 ** 9)
+        seg = [e for e in entries if h < e[0] < nxt]
+        if len(seg) >= 1024:
             seg.sort(key=lambda e: e[1])
             a = np.array([struct.unpack("<h", struct.pack("<H", d))[0] for _, _, d in seg], dtype=np.float64)
             return a, seg[0][1]
-    raise SystemExit(f"{path}: no complete 4096-entry pass")
+    raise SystemExit(f"{path}: no complete ring pass of at least 1024 entries")
 
 
 def load_wav_left(path):

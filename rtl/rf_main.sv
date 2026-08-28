@@ -142,9 +142,9 @@ module rf_main
     output logic [15:0] pivot_wr_cnt,
 
     // write-ring dump port (UART side)
-    input  logic [11:0] ring_raddr,
+    input  logic [10:0] ring_raddr,
     output logic [55:0] ring_rdata,
-    output logic [11:0] ring_wptr,
+    output logic [10:0] ring_wptr,
     output logic        ring_full
 );
 
@@ -588,9 +588,9 @@ module rf_main
         if (reset) begin
             wr_count <= 32'd0;
             wr_hash  <= 32'd0;
-            ring_wptr<= 12'd0;
+            ring_wptr<= 11'd0;
         end else begin
-            if (ring_adv) ring_wptr <= ring_wptr + 12'd1;
+            if (ring_adv) ring_wptr <= ring_wptr + 11'd1;
             if (do_write) begin
                 wr_count  <= wr_count + 32'd1;
                 wr_hash   <= f2;
@@ -598,7 +598,12 @@ module rf_main
         end
     end
 
-    rf_bram #(.WIDTH(56), .AW(12)) u_ring (
+    // 2048 entries, not 4096: a 56-bit x 4096 ring is 24 M10Ks -- more than
+    // the whole sprite line-buffer ring -- for a debug feature, and M10K is
+    // the binding resource on this device (539 of 553 in B13). Halving it
+    // frees 12 and still holds a 2048-write comparison against MAME and a
+    // 69 ms audio capture, both far more than any check has needed.
+    rf_bram #(.WIDTH(56), .AW(11)) u_ring (
         .clk(clk),
         .waddr(ring_wptr),
         .wdata(ring_wdat),

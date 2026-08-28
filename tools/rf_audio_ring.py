@@ -6,8 +6,8 @@
     .venv/bin/python3 tools/rf_uart.py -t 15 -o audio_ring.log
     python3 tools/rf_audio_ring.py audio_ring.log model45.wav
 
-The ring holds the first 4096 AUDIO_L samples from the moment the board's
-sound exceeds silence (Rayforce.sv, "Audio Ring"), 137 ms at 29761 Hz. The
+The ring holds the first N AUDIO_L samples (N = the ring's depth: 2048 from B15, 4096 before) from the moment the board's
+sound exceeds silence (Rayforce.sv, "Audio Ring"), 69 ms at 29761 Hz. The
 model's wav (es5505_model.py --out) is the dry mix of the same game run
 from reset, so the same moment exists in it: this finds the model's first
 non-silent sample and correlates the two 137 ms windows at the best lag.
@@ -32,8 +32,9 @@ def ring_samples(path):
         if m:
             entries.append((ln, int(m.group(1), 16) >> 1, int(m.group(2), 16)))
     for h in headers:
-        seg = [e for e in entries if h < e[0] <= h + 4200][:4096]
-        if len(seg) == 4096:
+        nxt = min([x for x in headers if x > h], default=10 ** 9)
+        seg = [e for e in entries if h < e[0] < nxt]
+        if len(seg) >= 1024:
             seg.sort(key=lambda e: e[1])            # by sample index
             print(f"capture starts at sample {seg[0][1]} after the sound CPU's release ({seg[0][1] / 29761:.2f} s)")
             return np.array([struct.unpack("<h", struct.pack("<H", d))[0] for _, _, d in seg], dtype=np.float64)

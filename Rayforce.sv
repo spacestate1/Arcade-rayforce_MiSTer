@@ -562,7 +562,7 @@ wire        cpu_reset = reset | ioctl_download | ~dl_seen | ~bist_done;
 
 wire [31:0] wr_count, wr_hash, last_pc;
 wire        trap_oor;
-wire [11:0] ring_raddr, ring_wptr;
+wire [10:0] ring_raddr, ring_wptr;
 wire [55:0] ring_rdata;
 wire        ring_full;
 

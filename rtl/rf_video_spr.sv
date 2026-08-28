@@ -161,11 +161,15 @@ module rf_video_spr
     // for 8192 records per bank at the MLAB cost of 4096 linked ones.
     //
     // Overflow: the prefix sum clamps each line's run to what is left, in
-    // line order, so a frame past 8192 rows loses rows from its last lines
+    // line order, so a frame past NREC rows loses rows from its last lines
     // and reports them on the self-test page (rec_drop). The busiest dumped
-    // frame needs 3144; a boss transition is what 8192 is for.
-    localparam int NREC = 8192;         // per bank
-    localparam int RW   = 13;           // record index width
+    // frame needs 3144 -- but the BOARD peaked at 8296 in a five-minute
+    // attract capture and dropped 104 rows once in 632 page passes, which
+    // 8192 could not hold. 12288 leaves ~45 % over that peak (2026-08-28);
+    // it is MLABs, not M10Ks, so it trades against the other MLAB users
+    // rather than against the video RAMs.
+    localparam int NREC = 12288;        // per bank
+    localparam int RW   = 14;           // record index width
     localparam int RW1  = RW + 1;       // the prefix sum reaches NREC
     // record: {sidx[9:0], srow[3:0]}
     (* ramstyle = "MLAB, no_rw_check" *) logic [13:0]   rec [0:1][0:NREC-1];
