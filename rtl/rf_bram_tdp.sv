@@ -76,7 +76,13 @@ module rf_bram_tdp #(
         .byteena_reg_b("CLOCK0"),
         .outdata_reg_a("UNREGISTERED"),
         .outdata_reg_b("UNREGISTERED"),
-        .read_during_write_mode_mixed_ports("DONT_CARE"),
+        // OLD_DATA, not DONT_CARE: waddr and raddr are the SAME address on
+        // every CPU access here, so every write is a same-address
+        // read-during-write and DONT_CARE leaves what port B returns
+        // that cycle undefined -- the fitter may hand back anything.
+        // OLD_DATA makes it deterministic (the previous contents), which
+        // is what the one-cycle read contract already assumes.
+        .read_during_write_mode_mixed_ports("OLD_DATA"),
         .read_during_write_mode_port_a("NEW_DATA_NO_NBE_READ"),
         .read_during_write_mode_port_b("NEW_DATA_NO_NBE_READ"),
         .init_file(INIT_FILE),

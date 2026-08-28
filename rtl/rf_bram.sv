@@ -44,7 +44,13 @@ module rf_bram #(
         .numwords_a(2**AW), .numwords_b(2**AW),
         .address_reg_b("CLOCK0"),
         .outdata_reg_b("UNREGISTERED"),
-        .read_during_write_mode_mixed_ports("DONT_CARE"),
+        // OLD_DATA, not DONT_CARE: waddr and raddr are the SAME address on
+        // every CPU access here, so every write is a same-address
+        // read-during-write and DONT_CARE leaves what port B returns
+        // that cycle undefined -- the fitter may hand back anything.
+        // OLD_DATA makes it deterministic (the previous contents), which
+        // is what the one-cycle read contract already assumes.
+        .read_during_write_mode_mixed_ports("OLD_DATA"),
         .lpm_type("altsyncram"),
         .intended_device_family("Cyclone V")
     ) r (
