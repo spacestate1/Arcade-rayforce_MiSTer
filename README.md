@@ -1,8 +1,15 @@
-# Ray Force / Gunlock for MiSTer
+# Taito F3 System for MiSTer
 
-An FPGA recreation of the **Taito F3 System** arcade board running **Ray Force**
-(Taito, 1994 — *Gunlock* in Europe, *Layer Section* in Japan), for the MiSTer
-FPGA platform. One core runs all three regional versions; the MRA picks which.
+An FPGA recreation of the **Taito F3 System** arcade board (1992–1998) for the
+MiSTer FPGA platform.
+
+The F3 chipset in this core — the 68020 main board, the four playfields with
+their line-RAM raster effects, the sprite engine, the priority mixer, and the
+Taito EN sound board — is written against MAME and verified against it frame by
+frame and sample by sample, so it is not tied to one game. **The game it runs
+today is Ray Force** (Taito, 1994 — *Gunlock* in Europe, *Layer Section* in
+Japan), in all three regional versions. What a second game needs is measured
+and listed under [Other F3 games](#other-f3-games) rather than guessed at.
 
 ## Status
 
@@ -51,9 +58,8 @@ The most recent build meets timing on every clock.
 4. **Untested on hardware**: the *Gunlock* and *Ray Force (Japan)* MRAs, the
    60 Hz refresh option, and the analog stick. All three are built and
    believed correct; none has been exercised on a board.
-5. The pivot/pixel layer stub means **this core is Ray Force-specific**. Other
-   F3 games would need that layer back (and the sound RAM moved to SDRAM,
-   since the stub is what pays for it).
+5. The pivot/pixel layer stub is the one thing that ties this core to Ray
+   Force — see [Other F3 games](#other-f3-games).
 
 ## How to use it
 
@@ -191,6 +197,37 @@ They compare against reference data produced from MAME by the Lua oracles in
 `tools/oracle_en_dump.lua` (sound). The dumps are not in the repository — they
 are hundreds of megabytes — and neither are the MAME source files the core was
 written against.
+
+## Other F3 games
+
+The F3 library is **35 distinct games across 100 ROM sets**, and they differ
+from each other by remarkably little. From MAME's driver:
+
+- **Four machine configurations** (`f3`, `f3_224a`, `f3_224b`, `f3_224c`) that
+  differ *only* in where the visible raster starts and how tall it is — 232
+  lines from line 24, or 224 from 31, 32 or 24.
+- **Two per-game video quirks**: `extend` (0/1, the playfield RAM layout) and
+  `sprite_lag` (0, 1 or 2 frames).
+- **Orientation**: ROT0, ROT90 or ROT270.
+- **ROM footprint from 9.8 MB (Arkanoid Returns) to 49 MB (Kirameki Star
+  Road)**, which is what decides how many games a given SDRAM module can hold.
+  Ray Force is 11.5 MB as this core loads it.
+
+So most of what a second game needs is four small parameters, which belong in
+the MRA rather than in the RTL. The real work is one architectural item:
+
+**The pivot (pixel) layer has to come back.** Ray Force never draws it — it
+only clears it, which this core proves on every run with a self-test row — so
+the layer's 64 KB of block RAM was spent on the sound board's RAM instead.
+That is the exception, not the rule: measured over 2,319 frames, **Elevator
+Action Returns writes the pivot RAM 131,072 times, 98,304 of them non-zero,
+touching all 256 pages**. Holding both that and the sound RAM needs 128 KB of
+block RAM, and the device is at 95 % of its M10K blocks, so one of them — or
+the 128 KB main RAM, the largest single block — has to move to SDRAM behind a
+cache. `rtl/rf_video_pivot.sv` itself is already written and verified.
+
+Encouragingly, the same measurement says **no F3 game examined uses sprite
+"trails"**, so the one sprite feature this core omits costs nothing.
 
 ## Credits and licence
 
