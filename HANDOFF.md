@@ -215,7 +215,27 @@ It also shows what a broken CPU write path looks like from the self-test
 page -- IRQ2 0, no render, CPU parked -- which is precisely Elevator Action
 Returns' signature.
 
-**Experiment 2, the one still worth running:** qualify with `clkena`
+**Experiment 2 (build `28165741`): qualify with `clkena` instead.
+Ray Force survived, 21/21. Elevator Action did not change at all** -- same
+PC, same rows. So the CPU write path is exonerated. The change is kept
+anyway: one write per bus cycle instead of two, on the cycle that was
+already the effective one.
+
+**And a correction that matters more than either experiment.** The write
+ring FREEZES at the 4096th write (`wr_frozen = wr_count[12]`), a Phase 0/1
+feature for capturing the boot stream. So "the ring stopped advancing, three
+captures identical, therefore the CPU stopped writing at byte 0x4001FD" was
+WRONG: the ring had simply hit its freeze, and the CPU may have run far
+past that point. What the ring did prove, rigorously, is worth keeping: an
+exact subsequence match puts the board's 2048 recorded ops at MAME's ops
+2048..4095, **identical, op for op, lanes included**. The divergence is
+somewhere after write 4096, unseen.
+
+The ring is circular from the next build, so a capture always shows the LAST
+2048 writes -- which is what tells you what a parked CPU did just before it
+parked. The WRITE HASH row already covers the first 4096, so nothing is lost.
+
+**(superseded) Experiment 2, when it was still worth running:** qualify with `clkena`
 instead, so each write happens once, on the cycle that is already the
 effective one, and the spurious address-setup write disappears. That is
 strictly today's behaviour minus the extra write, rather than a different

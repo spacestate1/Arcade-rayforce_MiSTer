@@ -571,8 +571,17 @@ module rf_main
     end
 
     // ---- write-stream capture (unchanged -- the MAME oracle) -------------
-    wire wr_frozen = wr_count[12];      // 4096 reached
-    assign ring_full = ring_ext_sel ? snd_frozen : wr_frozen;
+    // The main write ring used to FREEZE at the 4096th write, which was right
+    // for Phase 0/1 (capture the boot stream, compare with MAME) and is now
+    // actively misleading: the WRITE HASH row already covers those 4096, and
+    // a frozen ring looks exactly like a stopped CPU. Chasing Elevator Action
+    // Returns, that cost a wrong conclusion -- the ring had simply hit its
+    // freeze while the CPU ran on. It is circular now, so a capture always
+    // shows the LAST 2048 writes, which is what you want when a game has
+    // parked somewhere and you need to know what it did just before.
+    wire wr_frozen = 1'b0;
+    wire ring_wrapped = |wr_count[31:11];        // more than the 2048 held
+    assign ring_full = ring_ext_sel ? snd_frozen : ring_wrapped;
 
     wire do_write = clkena && (busstate == 2'b11) && !nWr && !wr_frozen;
 
