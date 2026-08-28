@@ -402,21 +402,21 @@ module rf_selftest_page (
         rom[ 357] = 6'd 0;
         rom[ 358] = 6'd 0;
         rom[ 359] = 6'd 0;
-        // row  9: 'FETCH IN RANGE'
-        rom[ 360] = 6'd38;
-        rom[ 361] = 6'd37;
-        rom[ 362] = 6'd52;
-        rom[ 363] = 6'd35;
-        rom[ 364] = 6'd40;
-        rom[ 365] = 6'd 0;
-        rom[ 366] = 6'd41;
-        rom[ 367] = 6'd46;
-        rom[ 368] = 6'd 0;
-        rom[ 369] = 6'd50;
-        rom[ 370] = 6'd33;
-        rom[ 371] = 6'd46;
-        rom[ 372] = 6'd39;
-        rom[ 373] = 6'd37;
+        // row  9: 'TRAP : MAIN PC'
+        rom[ 360] = 6'd52;
+        rom[ 361] = 6'd50;
+        rom[ 362] = 6'd33;
+        rom[ 363] = 6'd48;
+        rom[ 364] = 6'd 0;
+        rom[ 365] = 6'd26;
+        rom[ 366] = 6'd 0;
+        rom[ 367] = 6'd45;
+        rom[ 368] = 6'd33;
+        rom[ 369] = 6'd41;
+        rom[ 370] = 6'd46;
+        rom[ 371] = 6'd 0;
+        rom[ 372] = 6'd48;
+        rom[ 373] = 6'd35;
         rom[ 374] = 6'd 0;
         rom[ 375] = 6'd 0;
         rom[ 376] = 6'd 0;

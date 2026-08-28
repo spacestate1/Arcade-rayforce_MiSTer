@@ -29,7 +29,7 @@ PAGE = [
     ("-- CPU AND MEMORY MAP ---------------", 0, 0),
     ("PIVOT WR:SND PC",                     1, 1),   # {pivot RAM writes (must stay 0), sound CPU PC}
     ("WRITE HASH",                          1, 1),
-    ("FETCH IN RANGE",                      1, 1),
+    ("TRAP : MAIN PC",                     1, 1),   # {out-of-range fetch flag, main 68020 PC}
     ("SPR REC : DROP",                      1, 1),   # {records built last prepass, rows dropped at the cap}
     ("-- INTERRUPTS -----------------------", 0, 0),
     ("SND ES WR : RUN",                     1, 1),   # {sound CPU ES5505 writes, running}

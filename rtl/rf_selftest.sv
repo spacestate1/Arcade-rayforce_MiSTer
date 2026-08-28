@@ -139,7 +139,7 @@ module rf_selftest #(
                          (((exp_hash == 32'd0) ||                            \
                            (wr_hash == exp_hash)) ? ST_PASS : ST_FAIL)       \
                      : (wr_count != 32'h0) ? ST_BUSY : ST_WAIT; end          \
-        5'd9: begin VAL = {31'd0, trap_oor};                                \
+        5'd9: begin VAL = {7'd0, trap_oor, last_pc[23:0]};                  \
                  STA = trap_oor ? ST_FAIL :                                  \
                        cpu_running ? ST_PASS : ST_WAIT; end                  \
         5'd10: begin VAL = vid_rec;                                          \
