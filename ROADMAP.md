@@ -521,13 +521,25 @@ Taito F3 board, and MAME's per-game video config is *identical* to Gunlock's
 | Ensoniq samples | 4 MB | 4 MB (same layout) |
 | Total download | 11.5 MB | **18.5 MB** |
 
+**Correction, measured the same day: the pivot layer is NOT a blocker for
+this game.** The first probe counted *writes carrying non-zero data* and said
+98,304 of them -- but sampling the RAM's live contents tells a different
+story. All 131,072 writes happen once, in a burst between frames 120 and 180,
+and **the most non-zero data ever live in the layer is 1 longword out of
+16,384**, transient inside that burst; from frame 180 to frame 2,653 it is
+uniformly empty, exactly like Ray Force. It is a boot-time fill-and-clear (a
+memory test), not a layer in use. The MAME frame dumps agree: `pivot_ram` is
+all zero in all nine dumped frames. So Elevator Action Returns can run on the
+pivot stub, and the existing `PIVOT WR:SND PC` self-test row is already the
+watchdog that would say otherwise on hardware.
+
 So the work, in order of size:
 
-1. **Restore the pivot/pixel layer.** `rtl/rf_video_pivot.sv` already exists and
-   is correct; what is gone is its 64 KB of RAM. Holding both it and the 64 KB
-   sound RAM needs 128 KB of BRAM and M10K is at 527/553 (95 %), so one of them
-   has to move to SDRAM behind a cache -- or main RAM (128 KB, ~102 M10Ks, the
-   single biggest block) does.
+1. ~~Restore the pivot/pixel layer.~~ **Not needed for this game** -- see the
+   correction above. It stays on the list for whichever F3 game *does* draw
+   the layer, and the cost then is real: holding both it and the 64 KB sound
+   RAM needs 128 KB of BRAM against 527/553 M10Ks (95 %), so one of them, or
+   the 128 KB main RAM, has to move to SDRAM behind a cache.
 2. **Re-map SDRAM for 18.5 MB** and parameterise the region bases that are
    currently constants in `rf_prog_bus`, `rf_gfx_bus`, `rf_spr_gfx_bus` and
    `rf_smp_bus` (e.g. `rf_smp_bus`'s `BASE = 26'h3C0000`).
@@ -535,6 +547,15 @@ So the work, in order of size:
    decode.
 4. **Per-game orientation**: the OSD's rotation default is one value today.
 
-None of it is research -- it is all known work. But it is a Taito F3 *multi-game*
-core, which is a different project from a Ray Force core, and step 1 alone is
-an architectural change to how the BRAM budget is spent.
+What is already right for Elevator Action Returns and needs no work at all:
+the `extend` bit (hardcoded 1 in `rf_video_pipe`, and EACTION2 is extend 1),
+the sprite lag (2, same as Gunlock), sprite trails (neither game sets them),
+the whole sound board (same Taito EN, same 2 x 2 MB sample layout), and the
+pivot stub. What is left is the SDRAM map, the 2 MB program ROM, the raster
+crop, and per-game orientation -- mechanical work, no research.
+
+The raster crop is the smallest piece and the one that generalises furthest:
+`rayforce_video.sv` hardcodes `V_START = 31, V_END = 255`, and all four F3
+machine configurations are one 2-bit selector over
+{31,224}, {32,224}, {24,224}, {24,232}. `rayforce_video` is instantiated only
+in `Rayforce.sv` (the benches drive `vcnt` themselves), so it is contained.
