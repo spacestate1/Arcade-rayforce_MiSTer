@@ -197,7 +197,33 @@ mixed-port mode from DONT_CARE to OLD_DATA did not move it, so the fault is
 in WHEN the CPU samples that read-back, not in the memory's
 read-during-write mode.
 
-**Next, and in simulation rather than in 32-minute builds:** the failing
+**Experiment 1 (build `28154550`): qualifying every CPU write with
+`!clkena` -- write once, on the address-setup cycle, the way
+`rf_sound_main` does it. It BROKE RAY FORCE**, in exactly the way Elevator
+Action fails: IRQ2 acknowledges 0, nothing rendered, sound CPU never
+released, PC parked (0x002932). Reverted; Ray Force verified back to 21/21
+on `28150713`.
+
+That is a useful negative result, and it says something precise. Removing
+the write that commits at the END of the clock-enable cycle is what broke
+it, so THAT is the write carrying valid address and data -- the earlier one,
+at the address-setup edge, is the spurious one. `rf_sound_main`'s idiom does
+not transfer: it runs a different TG68K configuration (68000 mode, its own
+SPEED_DIV) whose outputs settle a cycle earlier.
+
+It also shows what a broken CPU write path looks like from the self-test
+page -- IRQ2 0, no render, CPU parked -- which is precisely Elevator Action
+Returns' signature.
+
+**Experiment 2, the one still worth running:** qualify with `clkena`
+instead, so each write happens once, on the cycle that is already the
+effective one, and the spurious address-setup write disappears. That is
+strictly today's behaviour minus the extra write, rather than a different
+write. If Ray Force survives and Elevator Action clears POST, the spurious
+write was the fault; if Ray Force survives and Elevator Action still stops
+at 01032C, the RAM path is exonerated and the search moves elsewhere.
+
+**And in simulation rather than in 32-minute builds:** the failing
 sequence is "write X, read X back, compare" against `rf_main`, which a
 Verilator bench can drive directly in minutes. Make it red first, then fix.
 Ray Force never trips this because its boot does not run this test.

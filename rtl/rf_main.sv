@@ -428,19 +428,31 @@ module rf_main
     wire [15:0] ram_q, pal_q, spr_q, pf_q, pfx_q, text_q, char_q,
                 line_q, pivot_q, dpram_q;
 
+    // Each CPU write fires ONCE, on the clock-enable cycle. busstate stays
+    // 2'b11 for both cycles of a 2-cycle bus op, so without a qualifier the
+    // write is performed twice; the one that commits at the end of the
+    // clock-enable cycle is the one carrying valid address and data, which
+    // build 28154550 established the hard way -- qualifying with !clkena
+    // instead (rf_sound_main's rule, which does not transfer: different
+    // TG68K mode and speed divider) broke Ray Force outright.
+    //
+    // The control and video-control registers are left unqualified: writing
+    // the same value twice to a latch is idempotent, and the EEPROM lines
+    // hang off those, so they are not worth disturbing.
+
     // CPU-only memories: simple dual port is enough.
     rf_bram_be #(.AW(16)) u_ram (
         .clk(clk), .waddr(a[16:1]), .wdata(cpu_dout),
-        .wren(cpu_wr && sel_ram), .be(be), .raddr(a[16:1]), .q(ram_q));
+        .wren(cpu_wr && sel_ram && clkena), .be(be), .raddr(a[16:1]), .q(ram_q));
 
     rf_bram_be #(.AW(13)) u_pfx (
         .clk(clk), .waddr(a[13:1]), .wdata(cpu_dout),
-        .wren(cpu_wr && sel_pfx), .be(be), .raddr(a[13:1]), .q(pfx_q));
+        .wren(cpu_wr && sel_pfx && clkena), .be(be), .raddr(a[13:1]), .q(pfx_q));
 
     // MB8421: this CPU on port A, the sound CPU on port B (byte lanes)
     rf_bram_tdp #(.AW(10)) u_dpram (
         .clk(clk),
-        .a_addr(a[10:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_dpram),
+        .a_addr(a[10:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_dpram && clkena),
         .a_be(be), .a_q(dpram_q),
         .b_addr(snd_dp_addr), .b_wdata(snd_dp_wdata), .b_wren(snd_dp_wren),
         .b_be(snd_dp_be), .b_q(snd_dp_q));
@@ -459,42 +471,42 @@ module rf_main
     // Video-visible memories: true dual port, CPU on A, renderer on B.
     rf_bram_tdp #(.AW(14)) u_pal (
         .clk(clk),
-        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pal),
+        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pal && clkena),
         .a_be(be), .a_q(pal_q),
         .b_addr(v_pal_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_pal_q));
 
     rf_bram_tdp #(.AW(15)) u_spr (
         .clk(clk),
-        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_spr),
+        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_spr && clkena),
         .a_be(be), .a_q(spr_q),
         .b_addr(v_spr_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_spr_q));
 
     rf_bram_tdp #(.AW(14)) u_pf (
         .clk(clk),
-        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pf),
+        .a_addr(a[14:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pf && clkena),
         .a_be(be), .a_q(pf_q),
         .b_addr(v_pf_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_pf_q));
 
     rf_bram_tdp #(.AW(12)) u_text (
         .clk(clk),
-        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_text),
+        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_text && clkena),
         .a_be(be), .a_q(text_q),
         .b_addr(v_text_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_text_q));
 
     rf_bram_tdp #(.AW(12)) u_char (
         .clk(clk),
-        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_char),
+        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_char && clkena),
         .a_be(be), .a_q(char_q),
         .b_addr(v_char_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_char_q));
 
     rf_bram_tdp #(.AW(15)) u_line (
         .clk(clk),
-        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_line),
+        .a_addr(a[15:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_line && clkena),
         .a_be(be), .a_q(line_q),
         .b_addr(v_line_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_line_q));
