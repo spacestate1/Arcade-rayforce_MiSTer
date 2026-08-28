@@ -27,7 +27,8 @@ have both been checked against MAME rather than by eye:
 - **On hardware**: the core's own audio capture (see *Audio Ring* below)
   **correlates 1.000 with MAME's mix** at the same instant of the same track.
 
-The most recent build meets timing on every clock.
+The released build (`Rayforce_20260828.rbf`, stamp 28124835) **meets timing on
+every clock** and passes every self-test row on a DE10-Nano.
 
 ## What the core covers
 
@@ -63,7 +64,7 @@ The most recent build meets timing on every clock.
 
 ## How to use it
 
-1. Copy `releases/Rayforce_<date>.rbf` to `/media/fat/_Arcade/cores/` on the
+1. Copy `releases/Rayforce_20260828.rbf` to `/media/fat/_Arcade/cores/` on the
    MiSTer SD card.
 2. Copy the `.mra` you want from `releases/` to `/media/fat/_Arcade/`.
 3. Put the MAME ROM zip in `/media/fat/games/mame/`. The MRAs accept

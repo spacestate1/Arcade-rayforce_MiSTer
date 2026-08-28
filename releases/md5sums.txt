@@ -1,0 +1,9 @@
+# md5 of each file shipped in releases/. Regenerate with:
+#     python3 tools/check_files.py --update
+# Verify with either:
+#     python3 tools/check_files.py
+#     md5sum -c md5sums.txt      (run from releases/)
+9233b2d32e353ae3293fe9ba154476f2  Gunlock.mra
+eba74602e9475512aa119a669c7f3352  Ray Force (Japan).mra
+850e74291b96a121726b1136599b5a2c  Ray Force.mra
+00ba5800d0f778e9e80ad23e4a694c7c  Rayforce_20260828.rbf
