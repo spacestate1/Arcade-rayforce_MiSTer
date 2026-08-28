@@ -102,6 +102,46 @@ committed (no commit was asked for -- the tree is left ready to review).
 | B15 | Resource work: the 56-bit debug ring 4096 -> 2048 entries (24 -> 12 M10Ks, M10K being the binding resource at 539/553) and the sprite record store 8192 -> 12288 rows per bank in MLABs, which is what the board's measured 8296-row peak overran | benches; the fit report's M10K and memory-LAB counts | **28113056: `GATE PASS: timing met` -- the FIRST fully clean build since B7. Worst slack +0.048 ns; the HDMI PLL clock that had missed by 0.04-0.16 ns in every build from B10 on is met, which says that miss was fitter congestion, not a real path. M10K 527/553 (was 539), ALMs 88 %, block memory 73 %. On the board: every page row PASS; the audio ring (2048 samples now) correlates +0.992 with `model95.wav` at ratio 1.0** |
 | P | Small missing parts: Pause (in B4), gunlock/rayforcej MRAs (written), NVRAM (design note only) | build + board | Pause + MRAs done; NVRAM see "Missing parts" |
 
+### Polish, input lag and the analog stick (2026-08-28, B16 `28121351`)
+
+Three OSD options added: **Stereo Mix** (None/25/50/100 % -- `AUDIO_MIX`,
+which had been tied to 0; the ES5505 pans its voices so this is a real
+choice), **Flip Screen**, and **Pause When OSD Open** (holds both CPUs
+through the existing `pause_eff`, so the music stops with the game).
+
+Flip Screen drives `screen_rotate`'s `flip`, i.e. the ROTATED output. It is
+deliberately not the renderer's flip: `rf_video_pipe`'s `flip` is tied high
+because Ray Force sets its flipscreen bit permanently, and the sprite engine
+takes its own flip from the sprite command word -- toggling the pipe's bit
+would flip the playfields and pivot layer but not the sprites. So the option
+applies whenever rotation is on; with Rotate = None, and on the analog raster
+(which stays in raster order on purpose, for a rotated CRT cab), there is
+nothing to flip.
+
+**Input lag: there is none to remove in this core.** The path is
+combinational end to end -- `hps_io`'s joystick word, OR'ed with the analog
+stick decode (`joy0_in`), into `rf_main`'s `j0`, into the `always_comb`
+that builds `in0_lo`/`in1_lo`/`ctrl_q`, straight to the CPU's read. Not one
+pipeline stage, no per-frame sampling: the game sees a button the moment it
+polls the port, so the lag is the USB poll (~1 ms) plus the game's own
+polling. The lag that DOES exist is in the video path and is a choice:
+`screen_rotate` writes the picture through the DDR3 framebuffer and the
+scaler reads it back, which costs a frame, so **Rotate = None (or the analog
+output, which never goes through the framebuffer) is the low-latency
+configuration**; MiSTer's own scaler and `vsync_adjust` add the rest.
+
+**The analog stick** (B13, in every build since) is correct by
+construction and the board is set up for it: the DE10 has a *Microsoft
+X-Box One pad* attached (045e:02d1, `ABS=3003f`, so the axes exist) and a
+`rayforce_input_045e_02d1_v3.map` already saved. MiSTer scales axes to
+-127..127 and sends **negative Y for up** (Main_MiSTer `input.cpp`,
+`joy_analog`), which is exactly what `stick_dirs` assumes -- so up/down
+cannot come out inverted. It ORs into the d-pad bits past 48/127 of
+deflection. What no one has done is hold the stick: if it does nothing on
+the cabinet, the thing to check first is MiSTer's own input map (the
+analog stick has to be assigned in "Define analog joystick"), not the core
+-- with the stick unassigned MiSTer never sends the axes at all.
+
 ### Sprites that never went away, and NVRAM (2026-08-28, B14 `28105535`)
 
 **The ghost.** Reported from the cabinet: player shots leave their pixels on

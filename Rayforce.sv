@@ -170,7 +170,9 @@ assign HDMI_BOB_DEINT = 0;
 
 // AUDIO_L/R are driven by the ES5505 mix below (sound board section)
 assign AUDIO_S   = 1;
-assign AUDIO_MIX = 0;
+// Stereo Mix (OSD): 0 none, 1 25 %, 2 50 %, 3 100 % (mono). The ES5505 pans
+// its voices, so this is a real choice on headphones, not a placeholder.
+assign AUDIO_MIX = status[13:12];
 
 assign LED_USER  = ioctl_download;
 assign LED_DISK  = 0;
@@ -202,9 +204,13 @@ localparam CONF_STR = {
     "-;",
     "O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
     "O[7:6],Rotate,CW (TATE),CCW,None;",
+    "O[14],Flip Screen,Off,On;",
     "O[10:8],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
     "O[11],Refresh Rate,58.9Hz Native,60Hz;",
     "-;",
+    "O[13:12],Stereo Mix,None,25%,50%,100% (Mono);",
+    "-;",
+    "O[15],Pause When OSD Open,Off,On;",
     "O[2],Service Mode,Off,On;",
     "O[3],Self Test,On,Off;",
     "O[5:4],UART Debug,Self Test,Audio Ring,Write Ring,Sound Ring;",
@@ -333,6 +339,16 @@ wire       rotate_ccw  = (rotate_sel == 2'd1);
 wire [2:0] scandoubler_fx = status[10:8];
 wire       rate_60     = status[11];
 wire       video_rotated;
+// Flip Screen (OSD): 180 degrees on the ROTATED output, which is where a
+// cabinet's monitor mounting shows up. It acts on screen_rotate's
+// framebuffer, so it applies whenever rotation is on; with Rotate = None
+// (and on the analog raster, which deliberately stays in raster order)
+// there is nothing to flip. Doing it in the renderer instead would desync
+// the sprites, which carry their own flip bit from the sprite command word.
+wire       flip_screen = status[14];
+// Pause When OSD Open (OSD): freeze the game -- both CPUs -- while the menu
+// is up, the way a cabinet's pause would.
+wire       pause_osd   = status[15];
 
 // The self-test page is drawn in raster order and must stay flat, so
 // rotation and the vertical aspect are both forced off while it shows.
@@ -352,6 +368,8 @@ always_ff @(posedge clk_sys) begin
     if (reset) paused <= 1'b0;
     else if (pause_btn && !pause_btn_d) paused <= ~paused;
 end
+// what actually holds the CPUs: the button's latch, or the OSD being open
+wire pause_eff = paused | (pause_osd & OSD_STATUS);
 
 //////////////////////  ROM DOWNLOAD PROOF  //////////////////////
 //
@@ -625,7 +643,7 @@ rf_main main
 
     .vbl_rise(vbl_rise),
     .j0(joy0_in), .j1(joy1_in),
-    .pause(paused),
+    .pause(pause_eff),
     .test_sw(status[2]),
     .nv_wr(nv_wr), .nv_addr(nv_addr), .nv_data(nv_data),
     .nv_sv_addr(ioctl_addr[6:1]), .nv_sv_data(nv_sv_data), .nv_wrote(nv_wrote),
@@ -694,7 +712,7 @@ wire [15:0] es_rd_data;
 
 rf_sound_main sound
 (
-    .clk(clk_sys), .reset(cpu_reset), .snd_reset(snd_reset), .pause(paused),
+    .clk(clk_sys), .reset(cpu_reset), .snd_reset(snd_reset), .pause(pause_eff),
     .clk_ram(clk_ram),
     .ch_addr(ch5_addr), .ch_dout(ch5_dout), .ch_req(ch5_req), .ch_ready(ch5_ready),
     .dp_addr(snd_dp_addr), .dp_wdata(snd_dp_wdata), .dp_wren(snd_dp_wren),
@@ -1080,8 +1098,8 @@ assign VGA_SL = vga_sl;
 
 // The cabinet monitor is vertical: rotate through the DDR3 framebuffer for
 // ordinary displays (the scaler output only; analog VGA stays raster order,
-// which is what a rotated-CRT cab wants). flip stays 0: Ray Force's own
-// flipscreen bit is handled inside the renderer, not here.
+// which is what a rotated-CRT cab wants). flip is the OSD's Flip Screen;
+// Ray Force's OWN flipscreen bit is handled inside the renderer, not here.
 screen_rotate screen_rotate
 (
     .CLK_VIDEO(CLK_VIDEO),
@@ -1091,7 +1109,7 @@ screen_rotate screen_rotate
 
     .rotate_ccw(rotate_ccw),
     .no_rotate(eff_no_rotate),
-    .flip(1'b0),
+    .flip(flip_screen),
     .video_rotated(video_rotated),
 
     .FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT),
