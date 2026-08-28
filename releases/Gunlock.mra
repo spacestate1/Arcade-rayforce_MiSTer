@@ -1,10 +1,10 @@
 <misterromdescription>
-  <name>Ray Force</name>
-  <setname>rayforce</setname>
+  <name>Gunlock</name>
+  <setname>gunlock</setname>
   <mameversion>0288</mameversion>
   <rbf>Rayforce</rbf>
   <year>1994</year>
-  <manufacturer>Taito America Corporation</manufacturer>
+  <manufacturer>Taito Corporation</manufacturer>
   <category>Shoot</category>
   <rotation>vertical</rotation>
   <resolution>15kHz</resolution>
@@ -33,9 +33,9 @@
                                      core's job; MAME loads them
                                      LOAD16_BYTE into an 8 MB region)
 
-       The zip is the MERGED gunlock set; this MRA is the US Ray Force
-       version, which differs from Gunlock by exactly one program ROM
-       (d66-25 instead of d66-24 at ic35). Parts match by CRC, so the
+       The zip is the MERGED gunlock set; this MRA is the Gunlock
+       version: the region variants differ by exactly one program ROM
+       (ic35: d66-24 Gunlock, d66-25 Ray Force US, d66-20 Ray Force Japan). Parts match by CRC, so the
        subfolder layout inside the zip does not matter.
        ============================================================ -->
   <rom index="0" zip="rayforce.zip|gunlock.zip" md5="None">
@@ -45,7 +45,7 @@
       <part name="d66-18.ic24" crc="8418513e" map="0001"/>
       <part name="d66-19.ic26" crc="95731473" map="0010"/>
       <part name="d66-21.ic37" crc="bd0d60f2" map="0100"/>
-      <part name="d66-25.ic35" crc="e08653ee" map="1000"/>
+      <part name="d66-24.ic35" crc="97816378" map="1000"/>
     </interleave>
 
     <!-- audiocpu 68000: ROM_LOAD16_BYTE pair -->

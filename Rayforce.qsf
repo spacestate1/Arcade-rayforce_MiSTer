@@ -27,7 +27,7 @@ set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name TIMEQUEST_MULTICORNER_ANALYSIS OFF
 set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING OFF
 set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
-set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name FITTER_EFFORT "AUTO FIT"
 set_global_assignment -name OPTIMIZATION_MODE "HIGH PERFORMANCE EFFORT"
 set_global_assignment -name ALLOW_POWER_UP_DONT_CARE ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS NORMAL
@@ -47,7 +47,7 @@ set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS ON
 set_global_assignment -name ECO_OPTIMIZE_TIMING ON
 set_global_assignment -name PERIPHERY_TO_CORE_PLACEMENT_AND_ROUTING_OPTIMIZATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
-set_global_assignment -name ALM_REGISTER_PACKING_EFFORT MEDIUM
+set_global_assignment -name ALM_REGISTER_PACKING_EFFORT HIGH
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name SEED 3
 
@@ -312,6 +312,17 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_gfx_bus.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_line.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_pf.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_mix.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_pipe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_pivot.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_spr_list.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_spr_gfx_bus.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_spr_ch_share.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_video_spr.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_es5505.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_smp_bus.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_mb87078.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_es5510_host.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_sound_main.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_main.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_eeprom_93c46.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rf_prog_bus.sv

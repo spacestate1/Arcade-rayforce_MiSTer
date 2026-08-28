@@ -152,11 +152,10 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM2_A, SDRAM2_BA, SDRAM2_DQ, SDRAM2_nCS, SDRAM2_nCAS, SDRAM2_nRAS, SDRAM2_nWE, SDRAM2_CLK} = 'Z;
 `endif
 
-assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_RD, DDRAM_DIN, DDRAM_BE, DDRAM_WE} = 0;
-
+// DDRAM_* and FB_EN/FORMAT/WIDTH/HEIGHT/BASE/STRIDE are driven by
+// screen_rotate (video out, below): the cabinet monitor is vertical.
 `ifdef MISTER_FB
-assign FB_EN = 0;
-assign {FB_FORMAT, FB_WIDTH, FB_HEIGHT, FB_BASE, FB_STRIDE, FB_FORCE_BLANK} = 0;
+assign FB_FORCE_BLANK = 0;
 `ifdef MISTER_FB_PALETTE
 assign {FB_PAL_CLK, FB_PAL_ADDR, FB_PAL_DOUT, FB_PAL_WR} = 0;
 `endif
@@ -169,8 +168,7 @@ assign HDMI_FREEZE    = 0;
 assign HDMI_BLACKOUT  = 0;
 assign HDMI_BOB_DEINT = 0;
 
-assign AUDIO_L   = 0;
-assign AUDIO_R   = 0;
+// AUDIO_L/R are driven by the ES5505 mix below (sound board section)
 assign AUDIO_S   = 1;
 assign AUDIO_MIX = 0;
 
@@ -179,10 +177,8 @@ assign LED_DISK  = 0;
 assign LED_POWER = 0;
 assign BUTTONS   = 0;
 
-// Native picture is 320x224; the cabinet is vertical (ROT90) but the
-// skeleton's diagnostic page is horizontal text, so no rotation yet.
-assign VIDEO_ARX = 13'd4;
-assign VIDEO_ARY = 13'd3;
+// VIDEO_ARX/ARY are assigned after the OSD decode below (a net used before
+// its declaration would become an implicit 1-bit wire).
 
 //////////////////////////   HPS   ///////////////////////////////
 
@@ -194,15 +190,29 @@ assign VIDEO_ARY = 13'd3;
 // Button order in the J1 list is the MiSTer arcade convention: buttons start
 // at joystick bit 4 and every core places Start at bit 10 and Coin at bit 11,
 // which is what the placeholder dashes are for (raiden2 note, same layout).
+// Video options follow the Raiden II core (Arcade-Raiden2_MiSTer/Raiden2.sv).
+// Ray Force is MAME ROT270 but its flipscreen inverts the raster, so the
+// upright rotation is CW (see rotate_ccw below); that is the default.
+// F3 boards have no DIP switches: game settings live in the service menu
+// (Service Mode below is the cabinet TEST switch) and in the 93C46 EEPROM.
+// Bits 2-5 are the debug options and predate the video ones; they keep their
+// numbers so a saved Rayforce.CFG still means the same thing.
 localparam CONF_STR = {
     "Rayforce;;",
     "-;",
+    "O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+    "O[7:6],Rotate,CW (TATE),CCW,None;",
+    "O[10:8],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+    "O[11],Refresh Rate,58.9Hz Native,60Hz;",
+    "-;",
     "O[2],Service Mode,Off,On;",
     "O[3],Self Test,On,Off;",
-    "O[5:4],UART Debug,Self Test,Off,Write Ring;",
+    "O[5:4],UART Debug,Self Test,Audio Ring,Write Ring,Sound Ring;",
     "-;",
     "R[0],Reset;",
-    "J1,Shot,Laser,-,-,-,-,Start,Coin,Service,Pause;",
+    // Same order as the MRA's <buttons names=...>: buttons start at joystick
+    // bit 4, Start is bit 10, Coin bit 11, Service bit 12, Pause bit 13.
+    "J1,Shot,Bomb,-,-,-,-,Start,Coin,Service,Pause;",
     "V,v",`BUILD_DATE
 };
 
@@ -220,6 +230,7 @@ wire        ioctl_wait;
 
 wire [31:0] joystick_0;
 wire [31:0] joystick_1;
+wire [15:0] joystick_l_analog_0, joystick_l_analog_1;   // Y[15:8], X[7:0], -127..127
 
 hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 (
@@ -232,6 +243,7 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
     .buttons(buttons),
     .status(status),
     .status_menumask(0),
+    .video_rotated(video_rotated),     // so the OSD follows the TATE rotation
 
     .ioctl_download(ioctl_download),
     .ioctl_wr(ioctl_wr),
@@ -242,8 +254,22 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 
     .joystick_0(joystick_0),
     .joystick_1(joystick_1),
+    .joystick_l_analog_0(joystick_l_analog_0),
+    .joystick_l_analog_1(joystick_l_analog_1),
     .ps2_key()
 );
+
+// The left analog stick steers too (an Xbox pad's stick is what most
+// people hold): past 48/127 of deflection it sets the digital direction,
+// OR'ed with the d-pad/hat bits. Y is negative upwards. Bit order is
+// MiSTer's: right, left, down, up from bit 0.
+function automatic logic [3:0] stick_dirs(input logic [15:0] a);
+    logic signed [7:0] x, y;
+    x = a[7:0]; y = a[15:8];
+    stick_dirs = {y < -8'sd48, y > 8'sd48, x < -8'sd48, x > 8'sd48};
+endfunction
+wire [15:0] joy0_in = joystick_0[15:0] | {12'd0, stick_dirs(joystick_l_analog_0)};
+wire [15:0] joy1_in = joystick_1[15:0] | {12'd0, stick_dirs(joystick_l_analog_1)};
 
 ///////////////////////   CLOCKS   ///////////////////////////////
 //
@@ -285,6 +311,38 @@ wire       selftest_on = ~status[3];
 wire [1:0] uart_mode   = status[5:4];
 wire       uart_log_txd, uart_ring_txd;
 
+// Video options (CONF_STR above).
+wire [1:0] ar          = status[122:121];
+wire [1:0] rotate_sel  = status[7:6];
+wire       no_rotate   = (rotate_sel == 2'd2);
+// Ray Force is MAME ROT270 but runs with the F3 flipscreen ON (its graphics
+// are stored flipped and the chipset draws them flipped), so the raster the
+// core outputs is already inverted: rotating it CW puts it upright, and
+// that is the default (2026-08-28: CCW was upside down on the HDMI output).
+wire       rotate_ccw  = (rotate_sel == 2'd1);
+wire [2:0] scandoubler_fx = status[10:8];
+wire       rate_60     = status[11];
+wire       video_rotated;
+
+// The self-test page is drawn in raster order and must stay flat, so
+// rotation and the vertical aspect are both forced off while it shows.
+wire       eff_no_rotate = no_rotate | selftest_on;
+
+assign VIDEO_ARX = (!ar) ? (eff_no_rotate ? 12'd4 : 12'd3) : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? (eff_no_rotate ? 12'd3 : 12'd4) : 12'd0;
+
+// Pause: the J1 "Pause" button (joystick bit 13, either player) toggles a
+// hold on the main CPU's clock enable. Video keeps running (the last frame
+// stays up), so the self-test page's IRQ-rate rows read FAIL while paused --
+// the acknowledges stop with the CPU -- which is what they should say.
+logic paused, pause_btn_d;
+wire  pause_btn = joystick_0[13] | joystick_1[13];
+always_ff @(posedge clk_sys) begin
+    pause_btn_d <= pause_btn;
+    if (reset) paused <= 1'b0;
+    else if (pause_btn && !pause_btn_d) paused <= ~paused;
+end
+
 //////////////////////  ROM DOWNLOAD PROOF  //////////////////////
 //
 // Counts and checksums the ioctl stream exactly as received. The MRA for
@@ -319,6 +377,42 @@ end
 // download loader owns it while ioctl_download is high, the CPU's
 // line-cached program fetches (rf_prog_bus) own it afterwards. ch1/ch2/ch4
 // are parked for the video/sound phases.
+
+// ch1/ch2: the two playfield tile planes, read by rf_video_pipe
+wire [26:1] ch1_addr, ch2_addr;
+wire [63:0] ch1_dout, ch2_dout;
+wire        ch1_req, ch1_ready, ch2_req, ch2_ready;
+
+// The sprite engine's four gfx plane requests (two fetch buses x two
+// planes) share ch4 through rf_spr_ch_share (only ch4 is free; see that
+// module for why a plain mux would desync the fetch CDC).
+wire [26:1] spr_a_lo_addr, spr_a_hi_addr, spr_b_lo_addr, spr_b_hi_addr;
+wire [63:0] spr_a_lo_dout, spr_a_hi_dout, spr_b_lo_dout, spr_b_hi_dout;
+wire        spr_a_lo_req, spr_a_lo_ready, spr_a_hi_req, spr_a_hi_ready;
+wire        spr_b_lo_req, spr_b_lo_ready, spr_b_hi_req, spr_b_hi_ready;
+wire [26:1] ch4_addr;
+wire [63:0] ch4_dout;
+wire        ch4_req, ch4_ready;
+
+// ch5: the sound 68000's program fetch (rf_sound_main's prog_bus)
+wire [26:1] ch5_addr;
+wire [63:0] ch5_dout;
+wire        ch5_req, ch5_ready;
+// ch6: the ES5505's sample lines (rf_smp_bus)
+wire [26:1] ch6_addr;
+wire [63:0] ch6_dout;
+wire        ch6_req, ch6_ready;
+
+rf_spr_ch_share spr_ch_share
+(
+    .clk_ram(clk_ram),
+    .a_lo_addr(spr_a_lo_addr), .a_lo_dout(spr_a_lo_dout), .a_lo_req(spr_a_lo_req), .a_lo_ready(spr_a_lo_ready),
+    .a_hi_addr(spr_a_hi_addr), .a_hi_dout(spr_a_hi_dout), .a_hi_req(spr_a_hi_req), .a_hi_ready(spr_a_hi_ready),
+    .b_lo_addr(spr_b_lo_addr), .b_lo_dout(spr_b_lo_dout), .b_lo_req(spr_b_lo_req), .b_lo_ready(spr_b_lo_ready),
+    .b_hi_addr(spr_b_hi_addr), .b_hi_dout(spr_b_hi_dout), .b_hi_req(spr_b_hi_req), .b_hi_ready(spr_b_hi_ready),
+    .ch_addr(ch4_addr), .ch_dout(ch4_dout),
+    .ch_req(ch4_req),   .ch_ready(ch4_ready)
+);
 
 wire [26:1] ch3_addr_pb;                // prog_bus side of the loader mux
 wire [63:0] ch3_dout;
@@ -377,8 +471,8 @@ sdram sdram
     .SDRAM_BA(SDRAM_BA), .SDRAM_nCS(SDRAM_nCS), .SDRAM_nWE(SDRAM_nWE),
     .SDRAM_nRAS(SDRAM_nRAS), .SDRAM_nCAS(SDRAM_nCAS),
     .SDRAM_CKE(SDRAM_CKE), .SDRAM_CLK(SDRAM_CLK),
-    .ch1_addr(26'd0), .ch1_dout(), .ch1_req(1'b0), .ch1_ready(),
-    .ch2_addr(26'd0), .ch2_dout(), .ch2_req(1'b0), .ch2_ready(),
+    .ch1_addr(ch1_addr), .ch1_dout(ch1_dout), .ch1_req(ch1_req), .ch1_ready(ch1_ready),
+    .ch2_addr(ch2_addr), .ch2_dout(ch2_dout), .ch2_req(ch2_req), .ch2_ready(ch2_ready),
     .ch3_addr(ioctl_download ? ld_addr : ch3_addr_pb),
     .ch3_dout(ch3_dout),
     .ch3_din(ioctl_download ? ld_din : ch3_din_pb),
@@ -386,7 +480,9 @@ sdram sdram
     .ch3_req(ioctl_download ? ld_req : ch3_req_pb),
     .ch3_rnw(ioctl_download ? 1'b0 : ch3_rnw_pb),
     .ch3_ready(ch3_ready),
-    .ch4_addr(26'd0), .ch4_dout(), .ch4_req(1'b0), .ch4_ready()
+    .ch4_addr(ch4_addr), .ch4_dout(ch4_dout), .ch4_req(ch4_req), .ch4_ready(ch4_ready),
+    .ch5_addr(ch5_addr), .ch5_dout(ch5_dout), .ch5_req(ch5_req), .ch5_ready(ch5_ready),
+    .ch6_addr(ch6_addr), .ch6_dout(ch6_dout), .ch6_req(ch6_req), .ch6_ready(ch6_ready)
 );
 
 ////////////////////  PROGRAM BUS + READBACK BIST  ///////////////
@@ -465,11 +561,18 @@ wire [15:0] pf_wr_cnt, spr_wr_cnt, pal_wr_cnt, line_wr_cnt, txt_wr_cnt;
 wire [15:0] irq2_rate, irq3_rate;
 wire        irq_rate_valid;
 
-// Video-side RAM read ports. Only the palette one is driven for now (the
-// diagnostic page dumps it); the rest are declared and parked so the
-// renderer can be dropped in without touching rf_main again.
-wire [13:0] v_pal_addr;
-wire [15:0] v_pal_q;
+// Video-side RAM read ports, owned by rf_video_pipe.
+wire [13:0] v_pal_addr, v_pf_addr;
+wire [14:0] v_line_addr, v_pivot_addr, v_spr_addr;
+wire [11:0] v_text_addr, v_char_addr;
+wire [15:0] v_pal_q, v_pf_q, v_line_q, v_text_q, v_char_q, v_pivot_q, v_spr_q;
+wire [7:0][15:0] vctrl0, vctrl1;
+
+// audio ring capture (driven at the bottom of the file, declared here
+// because the rf_main instance below connects it)
+logic        aud_ring_we, aud_armed;
+logic [22:0] aud_idx;
+logic [55:0] aud_ring_data;
 
 rf_main main
 (
@@ -479,18 +582,19 @@ rf_main main
     .prog_data(prog_data), .prog_valid(prog_valid),
 
     .vbl_rise(vbl_rise),
-    .j0(joystick_0[15:0]), .j1(joystick_1[15:0]),
+    .j0(joy0_in), .j1(joy1_in),
+    .pause(paused),
     .test_sw(status[2]),
 
-    .ctrl0(), .ctrl1(),
+    .ctrl0(vctrl0), .ctrl1(vctrl1),
 
     .v_pal_addr(v_pal_addr),   .v_pal_q(v_pal_q),
-    .v_pf_addr(14'd0),         .v_pf_q(),
-    .v_text_addr(12'd0),       .v_text_q(),
-    .v_char_addr(12'd0),       .v_char_q(),
-    .v_line_addr(15'd0),       .v_line_q(),
-    .v_pivot_addr(15'd0),      .v_pivot_q(),
-    .v_spr_addr(15'd0),        .v_spr_q(),
+    .v_pf_addr(v_pf_addr),     .v_pf_q(v_pf_q),
+    .v_text_addr(v_text_addr), .v_text_q(v_text_q),
+    .v_char_addr(v_char_addr), .v_char_q(v_char_q),
+    .v_line_addr(v_line_addr), .v_line_q(v_line_q),
+    .v_pivot_addr(v_pivot_addr), .v_pivot_q(v_pivot_q),
+    .v_spr_addr(v_spr_addr),   .v_spr_q(v_spr_q),
 
     .wr_count(wr_count), .wr_hash(wr_hash),
     .last_pc(last_pc), .trap_oor(trap_oor),
@@ -502,13 +606,221 @@ rf_main main
     .irq_rate_valid(irq_rate_valid),
 
     .ring_raddr(ring_raddr), .ring_rdata(ring_rdata), .ring_wptr(ring_wptr),
-    .ring_full(ring_full)
+    .ring_full(ring_full),
+
+    .snd_dp_addr(snd_dp_addr), .snd_dp_wdata(snd_dp_wdata), .snd_dp_wren(snd_dp_wren),
+    .snd_dp_be(snd_dp_be), .snd_dp_q(snd_dp_q),
+    .snd_reset(snd_reset),
+    .ring_ext_sel(uart_mode == 2'd3 || uart_mode == 2'd1),
+    .ring_ext_we(uart_mode == 2'd1 ? aud_ring_we : snd_ring_we),
+    .ring_ext_data(uart_mode == 2'd1 ? aud_ring_data : snd_ring_data),
+    .pivot_wr_cnt(pivot_wr_cnt)
 );
+
+////////////////////////  SOUND BOARD  ///////////////////////////
+//
+// The Taito EN board's 68000 and its map (rf_sound_main), held in reset by
+// the main CPU until it releases it. Stage 1 of Phase 3: the chips only
+// answer; their register writes go to the write ring (UART Debug = Sound
+// Ring) for the comparison against MAME's stream, and to the es_*/bk_*/vl_*
+// ports the sampler will take in stage 2. No audio yet.
+
+wire  [9:0] snd_dp_addr;
+wire [15:0] snd_dp_wdata, snd_dp_q;
+wire        snd_dp_wren;
+wire  [1:0] snd_dp_be;
+wire        snd_reset, snd_ring_we, snd_running;
+wire [55:0] snd_ring_data;
+wire [15:0] pivot_wr_cnt, snd_es_wr_cnt;
+wire [23:0] snd_pc;
+
+// the sampler's register ports and IRQ vector (declared before the
+// instance that drives them -- see the note on implicit nets above)
+wire        es_we, bk_we, es_irqv_ack, vl_we, vl_offset;
+wire  [7:0] vl_data;
+wire  [3:0] es_reg;
+wire [15:0] es_data;
+wire  [1:0] es_be;
+wire  [4:0] bk_voice;
+wire  [1:0] bk_data;
+wire  [7:0] es_irqv;
+wire        es_rd_req, es_rd_valid;
+wire  [3:0] es_rd_reg;
+wire [15:0] es_rd_data;
+
+rf_sound_main sound
+(
+    .clk(clk_sys), .reset(cpu_reset), .snd_reset(snd_reset), .pause(paused),
+    .clk_ram(clk_ram),
+    .ch_addr(ch5_addr), .ch_dout(ch5_dout), .ch_req(ch5_req), .ch_ready(ch5_ready),
+    .dp_addr(snd_dp_addr), .dp_wdata(snd_dp_wdata), .dp_wren(snd_dp_wren),
+    .dp_be(snd_dp_be), .dp_q(snd_dp_q),
+    .es_we(es_we), .es_reg(es_reg), .es_data(es_data), .es_be(es_be),
+    .bk_we(bk_we), .bk_voice(bk_voice), .bk_data(bk_data),
+    .vl_we(vl_we), .vl_offset(vl_offset), .vl_data(vl_data),
+    .esp_halt(),
+    .es_irqv(es_irqv), .es_irqv_ack(es_irqv_ack),
+    .es_rd_req(es_rd_req), .es_rd_reg(es_rd_reg), .es_rd_data(es_rd_data), .es_rd_valid(es_rd_valid),
+    .ring_we(snd_ring_we), .ring_data(snd_ring_data),
+    .last_pc(snd_pc), .es_wr_cnt(snd_es_wr_cnt), .running(snd_running)
+);
+
+// ---- the ES5505 (Phase 3 stage 2) and its sample fetch on ch6 -----------
+wire        sm_req, sm_valid, sm_busy;     // sm_line/sm_valid: from the BIST mux below
+wire [21:3] sm_addr;
+wire [63:0] sm_line;
+wire        es_out_valid;
+wire [7:0][19:0] es_out;
+wire  [4:0] es_active;
+wire [15:0] es_dbg_overrun, es_dbg_miss, es_dbg_wqdrop;
+
+// The sample clock: master 15.238 MHz / (16 x (ACT + 1)), the integer
+// division MAME makes, as a fractional divider of clk_sys.
+logic        es_tick;
+logic [31:0] es_acc;
+// the 32 rates as constants (a divider here was a combinational disaster)
+logic [31:0] es_rate;
+always_comb begin
+    case (es_active)
+        5'd0: es_rate = 32'd952380;
+        5'd1: es_rate = 32'd476190;
+        5'd2: es_rate = 32'd317460;
+        5'd3: es_rate = 32'd238095;
+        5'd4: es_rate = 32'd190476;
+        5'd5: es_rate = 32'd158730;
+        5'd6: es_rate = 32'd136054;
+        5'd7: es_rate = 32'd119047;
+        5'd8: es_rate = 32'd105820;
+        5'd9: es_rate = 32'd95238;
+        5'd10: es_rate = 32'd86580;
+        5'd11: es_rate = 32'd79365;
+        5'd12: es_rate = 32'd73260;
+        5'd13: es_rate = 32'd68027;
+        5'd14: es_rate = 32'd63492;
+        5'd15: es_rate = 32'd59523;
+        5'd16: es_rate = 32'd56022;
+        5'd17: es_rate = 32'd52910;
+        5'd18: es_rate = 32'd50125;
+        5'd19: es_rate = 32'd47619;
+        5'd20: es_rate = 32'd45351;
+        5'd21: es_rate = 32'd43290;
+        5'd22: es_rate = 32'd41407;
+        5'd23: es_rate = 32'd39682;
+        5'd24: es_rate = 32'd38095;
+        5'd25: es_rate = 32'd36630;
+        5'd26: es_rate = 32'd35273;
+        5'd27: es_rate = 32'd34013;
+        5'd28: es_rate = 32'd32840;
+        5'd29: es_rate = 32'd31746;
+        5'd30: es_rate = 32'd30721;
+        5'd31: es_rate = 32'd29761;
+        default: es_rate = 32'd29761;
+    endcase
+end
+always_ff @(posedge clk_sys) begin
+    es_tick <= 1'b0;
+    if (cpu_reset) es_acc <= 32'd0;
+    else if (es_acc + es_rate >= 32'd53372000) begin
+        es_acc  <= es_acc + es_rate - 32'd53372000;
+        es_tick <= 1'b1;
+    end else begin
+        es_acc  <= es_acc + es_rate;
+    end
+end
+
+rf_es5505 es5505
+(
+    .clk(clk_sys), .reset(cpu_reset | snd_reset),
+    .es_we(es_we), .es_reg(es_reg), .es_data(es_data), .es_be(es_be),
+    .bk_we(bk_we), .bk_voice(bk_voice), .bk_data(bk_data),
+    .sm_req(sm_req), .sm_addr(sm_addr), .sm_line(sm_line), .sm_valid(sm_valid), .sm_busy(sm_busy),
+    .tick(es_tick), .out_valid(es_out_valid), .out_ch(es_out), .out_active(es_active),
+    .irqv_out(es_irqv), .irqv_ack(es_irqv_ack),
+    .rd_req(es_rd_req), .rd_reg(es_rd_reg), .rd_data(es_rd_data), .rd_valid(es_rd_valid),
+    .dbg_overrun(es_dbg_overrun), .dbg_miss(es_dbg_miss), .dbg_wqdrop(es_dbg_wqdrop)
+);
+
+// Sample-region BIST: right after the main BIST, read the first 64 KB of
+// the Ensoniq ROM (bank 0, 8192 lines) back through the REAL sample fetch
+// path -- rf_smp_bus, SDRAM ch6, the same line format the sampler reads --
+// and fold it as the main BIST does (rotl1 + add per 16-bit word, little
+// endian as the loader stores the region). The expected value is computed
+// from d66-01 offline (see the note in HANDOFF.md). This is the test the
+// first sound build did not have: a wrong sum means the sampler is fed the
+// wrong bytes, however exact its arithmetic is.
+localparam logic [31:0] SMP_BIST_EXP = 32'hB86C4865;
+reg  [12:0] smp_bist_line;
+reg         smp_bist_req;
+reg  [31:0] smp_bist_sum;
+reg  [1:0]  smp_bist_st;                // 0 wait, 1 reading, 2 done
+wire        smp_bist_running = (smp_bist_st == 2'd1);
+wire        smp_bist_done    = (smp_bist_st == 2'd2);
+wire        smp_bist_pass    = smp_bist_done && (smp_bist_sum == SMP_BIST_EXP);
+wire [63:0] smp_line_w;
+wire        smp_valid_w;
+// fold four words of a line in one step: rotl1+add applied word by word
+function automatic logic [31:0] fold4(input logic [31:0] s, input logic [63:0] l);
+    logic [31:0] t;
+    t = {s[30:0], s[31]} + {16'd0, l[15:0]};
+    t = {t[30:0], t[31]} + {16'd0, l[31:16]};
+    t = {t[30:0], t[31]} + {16'd0, l[47:32]};
+    t = {t[30:0], t[31]} + {16'd0, l[63:48]};
+    fold4 = t;
+endfunction
+always @(posedge clk_sys) begin
+    smp_bist_req <= 1'b0;
+    if (cpu_reset) begin
+        smp_bist_st <= 2'd0; smp_bist_line <= 13'd0; smp_bist_sum <= 32'd0;
+    end else case (smp_bist_st)
+        2'd0: begin smp_bist_st <= 2'd1; smp_bist_req <= 1'b1; end
+        2'd1: if (smp_valid_w) begin
+            smp_bist_sum <= fold4(smp_bist_sum, smp_line_w);
+            if (smp_bist_line == 13'h1FFF) smp_bist_st <= 2'd2;
+            else begin smp_bist_line <= smp_bist_line + 13'd1; smp_bist_req <= 1'b1; end
+        end
+        default: ;
+    endcase
+end
+// the sampler sees the bus only once the BIST has released it
+assign sm_line  = smp_line_w;
+assign sm_valid = smp_valid_w && !smp_bist_running;
+
+rf_smp_bus smp_bus
+(
+    .clk_cpu(clk_sys), .reset(cpu_reset),
+    .addr(smp_bist_running ? {6'd0, smp_bist_line} : sm_addr),
+    .req(smp_bist_running ? smp_bist_req : sm_req),
+    .line(smp_line_w), .valid(smp_valid_w), .busy(sm_busy),
+    .clk_ram(clk_ram),
+    .ch_addr(ch6_addr), .ch_dout(ch6_dout), .ch_req(ch6_req), .ch_ready(ch6_ready)
+);
+
+// Mix: the pump sends pair 0 straight out and pairs 1-3 through the ESP,
+// which is a dry sum here (ROADMAP Phase 3, stage 3 is the volume chip);
+// four 20-bit pairs summed and scaled to 16 bits, MAME's route gains
+// (0.18 x 0.5 x the MB87078 at 0 dB) come to about a >> 6.
+logic signed [22:0] mix_l, mix_r;
+always_ff @(posedge clk_sys) if (es_out_valid) begin
+    mix_l <= 23'($signed(es_out[0])) + 23'($signed(es_out[2])) + 23'($signed(es_out[4])) + 23'($signed(es_out[6]));
+    mix_r <= 23'($signed(es_out[1])) + 23'($signed(es_out[3])) + 23'($signed(es_out[5])) + 23'($signed(es_out[7]));
+end
+logic mix_valid;
+always_ff @(posedge clk_sys) mix_valid <= es_out_valid;
+
+// the MB87078 volume control: the game's fades and level, then 16-bit out
+rf_mb87078 mb87078
+(
+    .clk(clk_sys), .reset(cpu_reset),
+    .we(vl_we), .offset(vl_offset), .data(vl_data),
+    .in_valid(mix_valid), .in_l(mix_l), .in_r(mix_r),
+    .out_l(AUDIO_L), .out_r(AUDIO_R)
+);
+
 
 rf_uart_dump uart_dump
 (
     .clk(clk_sys),
-    .reset(cpu_reset | (uart_mode != 2'd2)),
+    .reset(cpu_reset | (uart_mode == 2'd0)),
     .ring_wptr(ring_wptr), .ring_full(ring_full),
     .ring_raddr(ring_raddr), .ring_rdata(ring_rdata),
     .wr_hash(wr_hash),
@@ -542,9 +854,12 @@ rayforce_video video
     .pal_wr_cnt(pal_wr_cnt),
     .line_wr_cnt(line_wr_cnt),
 
-    .v_pal_addr(v_pal_addr),
-    .v_pal_q(v_pal_q),
+    // the mixer owns the palette port now; the diagnostic page's palette
+    // panel is dark, and the page itself is superseded by the self-test
+    .v_pal_addr(),
+    .v_pal_q(16'd0),
 
+    .rate_60(rate_60),
     .vbl_rise(vbl_rise),
     .div_o(vid_div), .hcnt_o(vid_hcnt), .vcnt_o(vid_vcnt),
 
@@ -557,6 +872,46 @@ rayforce_video video
 wire vbl_rise;
 wire [2:0] vid_div;
 wire [8:0] vid_hcnt, vid_vcnt;
+
+////////////////////////  VIDEO PIPELINE  ////////////////////////
+//
+// Line decode -> playfield build (tiles from SDRAM) -> pivot/text -> sprite
+// engine (sprite RAM walk + gfx fetch over shared ch4) -> mixer, all one or
+// two lines ahead of the beam, into a double-banked output line buffer.
+// Every block in it is verified pixel-exact against MAME in Verilator
+// (sim/), sprites included; the ch4 sharing runs inside the pipe bench
+// (sim/pipe_top.sv) so the arbitration meets the regression too.
+//
+// flip is tied high because Ray Force sets the flipscreen bit permanently
+// (its graphics are stored flipped in ROM); the sprite engine reads its own
+// flip from the sprite command word.
+
+wire [23:0] game_rgb;
+wire [31:0] vid_dbg_lines, vid_dbg_fetch, vid_dbg_max, vid_dbg_nz, vid_dbg_spr, vid_dbg_rec;
+
+rf_video_pipe vpipe
+(
+    .clk(clk_sys), .reset(reset), .clk_ram(clk_ram),
+    .div(vid_div), .hcnt(vid_hcnt), .vcnt(vid_vcnt),
+    .hblank(hblank), .vblank(vblank), .rate_60(rate_60),
+    .ctrl0(vctrl0), .ctrl1(vctrl1), .flip(1'b1),
+    .line_addr(v_line_addr), .line_q(v_line_q),
+    .pf_addr(v_pf_addr),     .pf_q(v_pf_q),
+    .pal_addr(v_pal_addr),   .pal_q(v_pal_q),
+    .text_addr(v_text_addr), .text_q(v_text_q),
+    .char_addr(v_char_addr), .char_q(v_char_q),
+    .pivot_addr(v_pivot_addr), .pivot_q(v_pivot_q),
+    .ch1_addr(ch1_addr), .ch1_dout(ch1_dout), .ch1_req(ch1_req), .ch1_ready(ch1_ready),
+    .ch2_addr(ch2_addr), .ch2_dout(ch2_dout), .ch2_req(ch2_req), .ch2_ready(ch2_ready),
+    .spr_addr(v_spr_addr), .spr_q(v_spr_q),
+    .spr_a_lo_addr(spr_a_lo_addr), .spr_a_lo_dout(spr_a_lo_dout), .spr_a_lo_req(spr_a_lo_req), .spr_a_lo_ready(spr_a_lo_ready),
+    .spr_a_hi_addr(spr_a_hi_addr), .spr_a_hi_dout(spr_a_hi_dout), .spr_a_hi_req(spr_a_hi_req), .spr_a_hi_ready(spr_a_hi_ready),
+    .spr_b_lo_addr(spr_b_lo_addr), .spr_b_lo_dout(spr_b_lo_dout), .spr_b_lo_req(spr_b_lo_req), .spr_b_lo_ready(spr_b_lo_ready),
+    .spr_b_hi_addr(spr_b_hi_addr), .spr_b_hi_dout(spr_b_hi_dout), .spr_b_hi_req(spr_b_hi_req), .spr_b_hi_ready(spr_b_hi_ready),
+    .rgb(game_rgb),
+    .dbg_lines(vid_dbg_lines), .dbg_fetch(vid_dbg_fetch), .dbg_max(vid_dbg_max),
+    .dbg_nz(vid_dbg_nz), .dbg_spr(vid_dbg_spr), .dbg_rec(vid_dbg_rec)
+);
 
 ///////////////////  SELF TEST PAGE + UART DEBUG  ////////////////
 //
@@ -594,6 +949,12 @@ rf_selftest selftest
     .pal_wr_cnt(pal_wr_cnt), .pf_wr_cnt(pf_wr_cnt), .spr_wr_cnt(spr_wr_cnt),
     .line_wr_cnt(line_wr_cnt), .txt_wr_cnt(txt_wr_cnt),
     .build_hex(`RF_BUILD_HEX),
+    .vid_lines(vid_dbg_lines), .vid_fetch(vid_dbg_fetch), .vid_max(vid_dbg_max),
+    .vid_nz(vid_dbg_nz), .vid_spr(vid_dbg_spr), .vid_rec(vid_dbg_rec),
+    .snd_diag1({pivot_wr_cnt, snd_pc[15:0]}),
+    .snd_diag2({snd_es_wr_cnt, 15'd0, snd_running}),
+    .snd_diag3({smp_bist_sum[15:0], es_dbg_overrun[7:0], es_dbg_wqdrop[7:0]}),
+    .smp_bist_done(smp_bist_done), .smp_bist_pass(smp_bist_pass),
 
     .rgb(st_rgb),
     .u_row(st_urow), .u_col(st_ucol), .u_char(st_uchar)
@@ -611,8 +972,32 @@ rf_uart_log uart_log
 
 // Idle high when a producer is not selected, so the HPS UART sees a quiet
 // line rather than a break condition.
-assign UART_TXD = (uart_mode == 2'd0) ? uart_log_txd  :
-                  (uart_mode == 2'd2) ? uart_ring_txd : 1'b1;
+assign UART_TXD = (uart_mode == 2'd0) ? uart_log_txd : uart_ring_txd;
+
+// Audio Ring (UART Debug = Audio Ring): the first 4096 output samples after
+// the sound starts, i.e. AUDIO_L from the first sample whose magnitude
+// exceeds 256 once the sound CPU runs, into the write ring as entries
+// {lanes 11, address = sample index, data = the 16-bit sample}. 137 ms of
+// what the board actually plays, for tools/rf_audio_ring.py to turn into a
+// wav and correlate with the model's output for the same moment. Every
+// other way of asking "is the sound right" needs an ear in the room.
+wire  signed [15:0] aud_l = AUDIO_L;
+always_ff @(posedge clk_sys) begin
+    aud_ring_we <= 1'b0;
+    if (cpu_reset | snd_reset) begin
+        aud_armed <= 1'b0; aud_idx <= 23'd0;
+    end else if (es_out_valid) begin
+        // the index counts every output sample since the sound CPU was
+        // released, so a capture is placed on the model's timeline (the
+        // model's t = 0 is MAME's reset, ~2 s before the release)
+        aud_idx <= aud_idx + 23'd1;
+        if (!aud_armed && (aud_l > 16'sd256 || aud_l < -16'sd256)) aud_armed <= 1'b1;
+        if (aud_armed || (aud_l > 16'sd256 || aud_l < -16'sd256)) begin
+            aud_ring_we   <= 1'b1;
+            aud_ring_data <= {2'b11, aud_idx, 15'd0, aud_l};
+        end
+    end
+end
 
 wire       ce_pix;
 wire [7:0] rgb_r, rgb_g, rgb_b;
@@ -626,7 +1011,7 @@ arcade_video #(.WIDTH(320), .DW(24)) arcade_video
 (
     .clk_video(clk_sys),
     .ce_pix(ce_pix),
-    .RGB_in(selftest_on ? st_rgb : {rgb_r, rgb_g, rgb_b}),
+    .RGB_in(selftest_on ? st_rgb : game_rgb),
     .HBlank(hblank), .VBlank(vblank),
     .HSync(hsync),  .VSync(vsync),
 
@@ -636,7 +1021,7 @@ arcade_video #(.WIDTH(320), .DW(24)) arcade_video
     .VGA_HS(vga_hs), .VGA_VS(vga_vs), .VGA_DE(vga_de),
     .VGA_SL(vga_sl),
 
-    .fx(3'd0),
+    .fx(scandoubler_fx),
     .forced_scandoubler(forced_scandoubler),
     .gamma_bus(gamma_bus)
 );
@@ -648,5 +1033,32 @@ assign VGA_HS = vga_hs;
 assign VGA_VS = vga_vs;
 assign VGA_DE = vga_de;
 assign VGA_SL = vga_sl;
+
+// The cabinet monitor is vertical: rotate through the DDR3 framebuffer for
+// ordinary displays (the scaler output only; analog VGA stays raster order,
+// which is what a rotated-CRT cab wants). flip stays 0: Ray Force's own
+// flipscreen bit is handled inside the renderer, not here.
+screen_rotate screen_rotate
+(
+    .CLK_VIDEO(CLK_VIDEO),
+    .CE_PIXEL(CE_PIXEL),
+    .VGA_R(r8), .VGA_G(g8), .VGA_B(b8),
+    .VGA_HS(vga_hs), .VGA_VS(vga_vs), .VGA_DE(vga_de),
+
+    .rotate_ccw(rotate_ccw),
+    .no_rotate(eff_no_rotate),
+    .flip(1'b0),
+    .video_rotated(video_rotated),
+
+    .FB_EN(FB_EN), .FB_FORMAT(FB_FORMAT),
+    .FB_WIDTH(FB_WIDTH), .FB_HEIGHT(FB_HEIGHT),
+    .FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE),
+    .FB_VBL(FB_VBL), .FB_LL(FB_LL),
+
+    .DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
+    .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
+    .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+    .DDRAM_DIN(DDRAM_DIN)
+);
 
 endmodule

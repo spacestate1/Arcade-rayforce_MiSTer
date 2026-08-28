@@ -188,24 +188,65 @@ Two findings the RTL has to honour:
            plane and all-normal combinations; MAME's duplicate-range quirk
            for several inverted planes is not reproduced. Ray Force never
            enables a clip plane, so that path has NO dump coverage.
-   **None of rf_gfx_bus / rf_video_line / rf_video_pf / rf_video_mix has
-   been through Quartus yet** -- they are in the QSF but not instantiated in
-   Rayforce.sv. Wire the pipeline in (a raster-driven controller that
-   decodes line N+1, builds N+1 and mixes N against the beam) and build
-   BEFORE adding pivot and sprites, so that whatever Quartus 17 objects to
-   in the new code -- packed structs, generate stages, signed arithmetic --
-   is found while the pile is small. That build also re-measures the
-   per-line cost against the real SDRAM controller.
+   - [x] `rf_video_pipe.sv` -- the raster-driven controller: decodes and
+         builds line T+2, mixes T+1, while the beam reads T out of a
+         double-banked output buffer. Through Quartus and on the board with
+         every self-test counter passing (longest real SDRAM fetch 23
+         clocks, longest build 2458 of 3456) -- but the game video is still
+         black; see HANDOFF.md "Second session" for the instrumented build
+         that localises it.
 
-3. - [ ] `rf_video_pivot.sv` -- text/pixel layer. Needs no SDRAM at all;
-         char RAM and pivot RAM are already BRAM with a port B waiting.
+3. - [x] `rf_video_pivot.sv` -- text/pixel layer (2026-08-27). One line at
+         a time on its own three RAM ports (text, char, pivot), concurrent
+         with the playfield build: a 64-word text-row usage scan, then one
+         pixel per clock through a text-RAM -> char/pivot-RAM pipeline into a
+         double-banked line buffer the mixer reads at smp_x. Both sources
+         (the 512x512 VRAM tilemap and the 512x256 pixel bitmap with its
+         borrowed-palette hack), flipscreen, per-tile flips, scroll, mosaic.
+         **15/15 dumped frames pixel-identical to the model through the
+         whole pipe** (`make -C sim pipe-all`). Coverage caveat: every
+         dumped frame uses the VRAM mode with mosaic off; the pixel-layer
+         and mosaic paths follow the model but have no dump exercising them.
+         ~390 clocks per line.
 4. - [~] Verilator bench -- `sim/`, started. `make -C sim gfx` covers the
          tile fetch; extend it to load a VRAM dump into the renderer and diff
          whole frames against the model. `F3_ONLY=` in f3_render.py renders a
          matching layer subset, so a half-built renderer can be compared
          before it is finished.
-5. - [ ] `rf_video_spr.sv` -- per-line bucket pre-pass, active set, line
-         buffer. No framebuffer: see the measurement below.
+5. - [~] Sprites, split into verified stages like the playfields were:
+     - [x] `rf_video_spr_list.sv` -- the list walker (get_sprite_info): the
+           Axis position/zoom state machine, bank switch, jump, multi-block
+           and per-axis scroll globals. Streams the drawable sprite list.
+           **Every dumped frame's list is byte-identical to the model**
+           (`make -C sim spr-all`), including the 198-sprite busy frame.
+     - [x] `rf_spr_gfx_bus.sv` -- sprite tile-row fetch. Same two-plane,
+           one-row-per-request shape as rf_gfx_bus; the only changes are the
+           region bases (sprites 0x180000, sprites_hi 0x380000) and the
+           sprite_hi bit packing (bit4/bit5 stored as adjacent pairs).
+           **584/584 rows byte-identical to the decoder** (`make -C sim
+           spr-gfx`), 11-12 cpu clocks per fetch.
+     - [x] `rf_video_spr.sv` -- the per-line builder (2026-08-27). Vblank
+           prepass walks the list and EXPANDS each sprite over the screen
+           lines it covers (dy8 accumulator), bucketing per-line row-records;
+           per line it walks the bucket, fetches each sprite row and lays it
+           down with the dx8 accumulator (x zoom + dedup, flipx, pen mask,
+           colour base) into a double-banked, tag-per-pixel line buffer the
+           mixer samples. Zoom-correct including the vertical overlay (several
+           source rows crushed onto one line combine write-if-empty).
+           **Every dumped frame's line buffer + row-usage is pixel-identical
+           to the model's framebuffer** (`make -C sim spr-line-all`), through
+           the 198-sprite frame 3000. Two truncation bugs found by the bench
+           (a 12-bit record-count limit that compared as < 0, like the
+           walker's) and one real algorithm bug (the vertical-overlay dedup).
+     - [x] Wired into `rf_video_pipe` and verified end to end: prepass into
+           a double-banked bucket store (1-frame lag), fetch-pipelined draw
+           (prefetch the next record's row while drawing the current, needed
+           to fit ~114 sprite-rows/line inside the clock budget), mixer fed
+           sp_color/sp_used. **`make -C sim pipe-all`: every frame 71680/71680
+           identical to the model through playfields + pivot + sprites.**
+       Remaining for sprites (all hardware-integration, no new pixel logic):
+       Rayforce.sv wiring (sprite RAM port + the two gfx planes sharing the
+       one free SDRAM channel), the BRAM-fit decision, then a build.
 
 **The sprite framebuffer question -- answered by measurement**
 
@@ -275,27 +316,123 @@ above leaves ~1100 clocks a line unspoken for.
 
 ## Phase 3: Sound
 
-**Hardware**
+**Hardware** (taito_en.cpp -- the Ensoniq "EN" sound board, shared by every F3 game)
 
-| Chip | Function | MAME source |
-|---|---|---|
-| `68000` | Audio CPU | `taito_en.cpp` |
-| `ES5505` | Sample playback | `es5506.cpp` |
-| `ES5510` | DSP (reverb/chorus) | `es5510.cpp` |
-| `MB87078` | Volume control | `taito_en.cpp` |
-| `MB8421` | Dual-port RAM | `taito_en.cpp` |
+| Chip | Function | Clock | MAME source |
+|---|---|---|---|
+| `68000` | Audio CPU | 30.47618 / 2 = 15.238 MHz | `taito_en.cpp` (map at `en_sound_map`) |
+| `ES5505` | 32-voice sampler, 4 outputs, 16-bit samples from 4 MB ROM | 15.238 MHz; output rate 30.47618 MHz / (2·16·32) = 29.76 kHz | `es5506.cpp` (2134 lines; the 5505 half) |
+| `ES5510` | DSP (reverb/chorus), external delay DRAM | 10 MHz | `es5510.cpp` (1288 lines) |
+| `MC68681` | DUART -- only its timer matters: it is the sound CPU's periodic interrupt (vector read at 0xFFFFFD) | 4 MHz | `taito_en.cpp` |
+| `MB87078` | Volume control, gain table on the ES5505 outputs | -- | `taito_en.cpp` |
+| `MB8421` | 2 KB dual-port RAM to the main 68020 | -- | already in `rf_main.sv` (`sel_dpram`, C00000-C007FF) |
 
-**Sub-tasks**
-- [ ] `rf_audio_68000.sv` — audio CPU (second TG68K instance)
-- [ ] `rf_es5505.sv` — sampler (faithful implementation)
-- [ ] `rf_es5510.sv` — DSP stub first (dry pass-through), then real
-- [ ] `rf_mb87078.sv` — volume control
-- [ ] `rf_taito_en.sv` — sound board glue
+**Sound 68000 memory map** (`en_sound_map`)
+
+```
+000000-00FFFF  RAM 64 KB ("osram"), mirrored x4 and again at FF0000
+140000-140FFF  MB8421 dual-port RAM, high byte lane
+200000-20001F  ES5505 registers
+260000-2601FF  ES5510 host port, low byte lane
+280000-28001F  MC68681 DUART, low byte lane
+300000-30003F  ES5505 sample bank select
+340000-340003  MB87078 volume, high byte lane
+C00000-C1FFFF  ROM bank 1  \
+C20000-C3FFFF  ROM bank 2   } 512 KB audiocpu ROM (d66-22/23), banked
+C40000-C7FFFF  ROM bank 3  /  (bank 1 is switched by the main CPU at 300000
+                               on Kirameki only; fixed on Ray Force)
+FFFFFD         DUART interrupt vector
+```
+
+The main CPU side is already there: the dual-port RAM at C00000, the sound
+reset pair at C80000/C80100 (asserted at boot -- the sound CPU starts held
+in reset and the game releases it), the bank register at 300000 (ignored:
+Ray Force does not bank).
+
+**Everything the board needs is already in SDRAM.** The MRA streams the
+audio CPU ROM at 0x100000 (512 KB, right after the 1 MB maincpu) and the
+Ensoniq samples at 0x780000 (2 x 2 MB, plain); ROM BYTES 00B80000 on the
+self-test page is the whole 11.5 MB image including them. Sample format:
+MAME loads each ROM `LOAD16_BYTE` into an erased 8 MB big-endian region, so
+the ES5505 sees 16-bit words whose HIGH byte is the ROM byte and whose low
+byte is 0 -- 8-bit samples, word i = SDRAM byte 0x780000 + i (d66-01 for
+i < 2M, d66-02 after). Each voice has its own 2-bit bank register
+(0x300000 + 2v, `<< 20` words), so sample word address = bank << 20 | the
+20-bit accumulator integer.
+
+**Stage 0 numbers (attract mode, 60 s):** 2,535 ES5505 register writes per
+frame (the driver refreshes every voice continuously), ~130 MB87078 volume
+writes per frame, DUART/ES5510 traffic small; `dump/en_writes.txt` (frame,
+tag, address, data, lanes, machine time) and `dump/en_mix.wav` (48 kHz
+stereo, MAME's mix) are the references.
+
+**The two walls, stated up front**
+
+1. *BRAM.* The sound CPU's 64 KB RAM is 52 M10Ks and the video build has
+   ~17 free. **Measured (Stage 0, 2026-08-27):** the sound program's
+   working set after boot is ~16.6 KB in 11 scattered ranges (65 of 256
+   pages read), so a plain smaller RAM does not fit it either. **Resolved
+   another way: pivot RAM.** The 64 KB pixel-layer RAM at 630000 is 64
+   M10Ks and is all zero in every one of the 30 dumped frames -- Ray Force
+   never writes the pixel layer. Shrinking it to a stub (reads return 0,
+   plus a write counter on the self-test page so the assumption is checked
+   on hardware every run) frees the full 64 KB for the sound RAM with ~29
+   blocks to spare. Other F3 games that use the pixel layer would need it
+   back; this core is Ray Force's for now.
+2. *SDRAM channels.* All four are taken (ch1/ch2 playfields, ch3 CPU, ch4
+   sprites). The sound board needs two more streams: the 68000's program
+   fetch (a line cache like `rf_prog_bus`) and the ES5505's sample reads --
+   32 voices x 29.76 kHz x 2 samples (interpolation) ~ 1.9 M reads/s. Per
+   voice the next address is predictable (accumulator + step), so a 4-word
+   burst per voice serves several output samples for all but the highest
+   pitches; occupancy is ~10-15 %, not a bandwidth problem, but it is a
+   channel. Options: add ch5/ch6 to `rf_sdram` (the controller's channel
+   logic is regular; the fixed-priority scan just grows), or arbitrate the
+   sound CPU onto ch3 with the main CPU and the samples onto ch4 with the
+   sprites (`rf_spr_ch_share` already does this shape). Adding channels is
+   cleaner; the sprite work showed how sensitive ch4's latency is.
+
+**Stages -- each verified before the next, the way the video was**
+
+- [x] **Stage 0: oracle** (2026-08-27: `oracle_en_dump.lua`, `es5505_model.py`, `es5505_compare.py`; model vs MAME mix correlation 0.95-0.99). Extend `tools/oracle_f3dump.lua` (or a sibling)
+      to tap the sound side in MAME: the sound CPU's writes to the ES5505
+      (`0x200000-1F`), the bank and volume registers, as a stream with
+      frame stamps -- the same write-stream idea that proved the 68020 in
+      Phase 1 -- plus MAME's mixed output (`-wavwrite`) for the end-to-end
+      check, and a footprint map of the 64 KB sound RAM (which pages are
+      ever touched). Port `generate_samples()` for the ES5505 to Python
+      (`tools/es5505_model.py`) and prove it against the wav, so the RTL
+      has an exact model to diff against, as `f3_render.py` was for video.
+- [x] **Stage 1 done (2026-08-28, build 27230527/28001753: 1387 chip writes identical to MAME from reset, 1775-long identical run in the steady state). `rf_sound_main.sv`** -- second TG68K.C in 68000 mode, the
+      map above, ROM through a `rf_prog_bus` line cache, the sound RAM per
+      the wall-1 decision, the MB8421's other port (bring it out of
+      `rf_main`), the DUART reduced to its timer + interrupt vector, the
+      reset pair wired from `rf_main`. ES5505/ES5510/MB87078 register
+      writes go to a write ring on the UART. **Exit: the register write
+      stream matches MAME's** (`rf_ring_check.py`), i.e. the sound program
+      runs and talks to the chips it thinks it has.
+- [x] **Stage 2 RTL done, integration pending (2026-08-28: sample-exact vs the model over 1.15 M samples). `rf_es5505.sv`** -- 32 voices time-multiplexed on one
+      datapath (one voice per clock slot, 32 slots per output sample, as
+      the chip does): accumulator/step, loop modes (forward, reverse,
+      bidirectional, stop), the transwave/loop-end flags, 4-channel
+      output with per-voice left/right volume, volume ramps, the per-voice
+      IRQ. Samples over the new SDRAM channel with a per-voice 4-word
+      prefetch line. **Exit: sample-exact against `es5505_model.py`** on
+      captured register streams (`make -C sim es5505`), then the mixed
+      output against MAME's wav within DAC tolerance.
+- [x] **Stage 3 written (2026-08-28, in build 28001753; not yet heard). `rf_mb87078.sv`** (a gain table on the four outputs) and
+      the **ES5510 stub** (dry pass-through with the host port answering,
+      so the driver does not hang on it). **Exit: music and effects on the
+      board through AUDIO_L/R** (the framework resamples from 29.76 kHz).
+- [ ] **Stage 4: real ES5510** -- only if a game needs it audibly; Ray
+      Force uses it for reverb. Its delay memory is external DRAM in
+      hardware; here it would be another SDRAM stream.
 
 **Exit criteria**
-- [ ] Music plays (ES5505 samples)
-- [ ] Sound effects play
-- [ ] ES5510 stub doesn't break audio (dry pass-through)
+- [x] Sound program runs: register write stream identical to MAME (Stage 1)
+- [x] ES5505 sample-exact against the model (Stage 2)
+- [x] Music and sound effects play on the board (2026-08-28, B13 28094310: the Audio Ring capture correlates 1.000 with MAME's mix; by-ear playthrough still pending. B12 was scrambled: the driver reads the ES5505 (its sound table comes out of the sample ROM through O1 reads on a stopped voice) and the RTL answered reads with a constant; B13 adds the read port, exact in the bench incl. all 8001 reads -- see HANDOFF "The sound bug: ES5505 reads")
+- [ ] ES5510 stub does not break audio (dry pass-through)
 
 ---
 

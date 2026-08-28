@@ -41,15 +41,22 @@ def main():
     ap.add_argument("--no-load", action="store_true")
     ap.add_argument("--no-shot", action="store_true")
     ap.add_argument("--wait", type=int, default=25, help="seconds to wait after load_core")
+    ap.add_argument("--rbf", default=RBF, help="bitstream to upload (build.sh wipes "
+                    "output_files/, so a build kept aside needs this)")
+    ap.add_argument("--mra", action="store_true", help="also upload releases/Ray Force.mra")
     args = ap.parse_args()
+    rbf = args.rbf
 
-    if not os.path.exists(RBF):
-        sys.exit(f"{RBF} not found -- run ./build.sh first")
+    if not os.path.exists(rbf):
+        sys.exit(f"{rbf} not found -- run ./build.sh first")
 
     c = connect()
     name = "Rayforce_%s.rbf" % datetime.datetime.now().strftime("%Y%m%d_%H%M")
     sftp = c.open_sftp()
-    sftp.put(RBF, f"/media/fat/_Arcade/cores/{name}")
+    sftp.put(rbf, f"/media/fat/_Arcade/cores/{name}")
+    if args.mra:
+        sftp.put("releases/Ray Force.mra", MRA)
+        print("uploaded MRA")
     sftp.close()
     print("uploaded", name)
 

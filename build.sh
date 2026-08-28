@@ -33,10 +33,13 @@ rm -rf db incremental_db output_files
 LOG=/tmp/rayforce_build_progress.log
 rm -f "$LOG"
 
-# Launch the build in a systemd scope, in the background
+# Launch the build in a systemd scope, in the background.
+# choom -n 1000: if physical memory runs out before the cgroup cap does
+# (other apps holding RAM), the global OOM killer picks the build, not them
+# (this systemd is too old for -p OOMScoreAdjust).
 systemd-run --user --scope --quiet \
     -p MemoryHigh=11G -p MemoryMax=11G -p CPUWeight=100 \
-    nice -n 5 quartus_sh --flow compile Rayforce > "$LOG" 2>&1 &
+    choom -n 1000 -- nice -n 5 quartus_sh --flow compile Rayforce > "$LOG" 2>&1 &
 BUILD_PID=$!
 
 # Progress monitor: watch the log for phase transitions
