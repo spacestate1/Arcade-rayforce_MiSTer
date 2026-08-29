@@ -17,9 +17,13 @@ import time
 
 import paramiko
 
-HOST = "172.17.1.164"
-USER = "root"
-PASSWORD = "1"
+# The board, overridable so a checkout is not tied to one bench:
+#   RF_HOST=192.168.1.50 RF_PASS=hunter2 python3 tools/rf_deploy.py
+# The defaults are MiSTer's own (root / 1) and a LAN address; there is no
+# secret here, but a hardcoded address is nobody else's business.
+HOST = os.environ.get("RF_HOST", "172.17.1.164")
+USER = os.environ.get("RF_USER", "root")
+PASSWORD = os.environ.get("RF_PASS", "1")
 MRA = "/media/fat/_Arcade/Ray Force.mra"
 RBF = "output_files/Rayforce.rbf"
 
