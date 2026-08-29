@@ -18,7 +18,7 @@ and listed under [Other F3 games](#other-f3-games) rather than guessed at.
 | **Ray Force** (US) | **~90 %** | Plays with sound. Every self-test row passes on hardware; video pixel-identical to MAME, audio sample-exact. Held back from "done" by the sprite overrun in busy scenes (Known problems #1), the ES5510 stub, and the fact that nobody has played it start to finish. |
 | **Gunlock** (World) | **~85 %** | Same board and the same ROMs bar one program chip, so everything above should apply — but the MRA has never been loaded on a board. Untested, not unlikely. |
 | **Ray Force** (Japan) | **~85 %** | As Gunlock. |
-| *Elevator Action Returns* | **~80 %** | **Runs** — boots, plays, sprites and playfields draw, sound CPU streaming, one vblank ack per frame. All five sampled frames now match MAME pixel for pixel across the full 232-line visarea. Still in `releases/experimental/`: the pivot layer is a mirror, and five frames are not a game. |
+| *Elevator Action Returns* | **~80 %** | **Runs** — boots, plays, sprites and playfields draw, sound CPU streaming, one vblank ack per frame. All ten sampled frames match MAME pixel for pixel across the full 232-line visarea, five of them dumped after the fixes as an out-of-sample check. Still in `releases/experimental/`: the pivot layer is a mirror, ten frames of attract and character select are not a playthrough, and its sound has never been correlated. |
 
 Percentages are judgement, not arithmetic; the rows either side of them are
 the evidence.
@@ -345,10 +345,12 @@ from each other by remarkably little. From MAME's driver:
 
 **Elevator Action Returns runs** — it boots, plays, and draws sprites and
 playfields, with the sound CPU streaming and one vblank acknowledge per
-frame. All five sampled frames now match MAME pixel for pixel across the
+frame. All ten sampled frames match MAME pixel for pixel across the
 full 232-line visarea (`make -C sim ear-pipe-all`, 74,240 pixels each). It
-stays in `releases/experimental/` because five frames are not a game and the
-pivot layer is still a mirror rather than real RAM.
+stays in `releases/experimental/` because ten frames of attract and
+character select are not a playthrough, the pivot layer is still a mirror
+rather than real RAM, and its sound has never been correlated the way Ray
+Force's was.
 
 Getting there turned up a pattern worth naming: **every one of its rendering
 defects was a Ray Force dimension frozen into the RTL as a constant.** The
@@ -393,8 +395,31 @@ Both failures were silent hangs rather than error messages, and the game's own
 error handler is generic enough to point at the wrong RAM, which is why this
 took a while. The full trail is in `HANDOFF.md`.
 
-So most of what a second game needs is four small parameters, which belong in
-the MRA rather than in the RTL. The real work is one architectural item:
+So most of what a *compatible* second game needs is four small parameters,
+which belong in the MRA rather than in the RTL. That is now true: the config
+byte carries them, and `vis_mode` reaches both the raster crop and the sprite
+cull.
+
+**"Compatible" is doing real work in that sentence, though.** Counting
+MAME's own `f3_config_table` (33 games):
+
+| Still hardwired here | How many games it blocks |
+|---|---|
+| `extend` is tied to 1 | **15 of 33** are `extend = 0` |
+| sprite lag is tied to 1 | 7 games want 2, 3 want 0 — including **both games this core ships** |
+| pivot layer is an 8 KB mirror | every game that actually draws on it |
+| 18.5 MB SDRAM map | Kaiser Knuckle and Kirameki Star Road are 48-49 MB |
+
+Config bits [2] and [4:3] are reserved for the first two and are not read
+yet. `extend` is the awkward one: it is hardcoded in the Python model
+(`EXTEND = True`) as well as in the RTL, so there is no verified oracle for
+the non-extend path — that work starts before any RTL does. And the sprite
+lag row is not hypothetical future work: MAME says lag 2 for both Gunlock and
+Elevator Action, the engine does 1, and the benches hide it because they hand
+the sprite RAM over from frame-2 themselves.
+
+So the architecture generalises; the coverage does not yet. The remaining
+architectural item is still the biggest one:
 
 **The pivot (pixel) layer has to come back.** Ray Force never draws it — it
 only clears it, which this core proves on every run with a self-test row — so
