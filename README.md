@@ -76,9 +76,26 @@ row and shows wrong graphics.
    couple of minutes shows:
 
    ```
-   SPRLINE : LATE  3EFA182E      longest line 16122 clocks, 6190 late lines
-                                 (the per-line budget is 3456 clocks)
+   before (ring of 4)  SPRLINE : LATE  3EFA182E   6190 late lines
+   after  (ring of 8)  SPRLINE : LATE  3D7703CE    974 late lines
+                       (longest line ~15700 clocks; the budget is 3456)
    ```
+
+   **Mostly fixed, not entirely.** Deepening the run-ahead ring from 4 line
+   buffers to 8 removed 86 % of it, measured on the same attract sequence
+   second by second: the burst that used to add 4,770 late lines at t=56 s is
+   now zero, and the total falls from 6,190 to 974.
+
+   What is left is not a buffering problem and no ring depth will fix it. A
+   ring of 8 banks 7 spare lines plus the line's own budget -- 27,648 clocks,
+   comfortably more than the 15,722 the worst single line needs -- so any one
+   heavy line is now covered. The residual is *runs* of consecutive heavy
+   lines, where the draw is simply too slow in aggregate: thirty lines
+   needing ~8,000 clocks each is 240,000 against the 103,680 those thirty
+   lines are allotted. That is a fetch-bandwidth ceiling in the sprite
+   graphics path, and the structural answer is to fetch faster -- more
+   outstanding SDRAM requests, or moving sprite graphics to DDR3 where they
+   would not contend with the playfields at all.
 
    Note what is NOT wrong: `SPR REC : DROP` stays at zero, so the sprite list
    and the record store are keeping up — every sprite row the frame asked for

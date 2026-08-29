@@ -1089,6 +1089,7 @@ rf_selftest selftest
     .div(vid_div), .hcnt(vid_hcnt), .vcnt(vid_vcnt),
 
     .dl_active(ioctl_download), .dl_seen(dl_seen),
+    .game_id(cfg_game),
     .exp_bytes(exp_bytes), .exp_sum(exp_sum), .exp_bist(exp_bist), .exp_hash(exp_hash),
     .dl_bytes(dl_bytes), .dl_sum(dl_sum),
     .bist_sum(bist_sum), .bist_done(bist_done),
