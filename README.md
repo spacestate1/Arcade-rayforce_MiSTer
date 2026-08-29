@@ -18,7 +18,7 @@ and listed under [Other F3 games](#other-f3-games) rather than guessed at.
 | **Ray Force** (US) | **~90 %** | Plays with sound. Every self-test row passes on hardware; video pixel-identical to MAME, audio sample-exact. Held back from "done" by the sprite overrun in busy scenes (Known problems #1), the ES5510 stub, and the fact that nobody has played it start to finish. |
 | **Gunlock** (World) | **~85 %** | Same board and the same ROMs bar one program chip, so everything above should apply — but the MRA has never been loaded on a board. Untested, not unlikely. |
 | **Ray Force** (Japan) | **~85 %** | As Gunlock. |
-| *Elevator Action Returns* | **~65 %** | **Runs** — boots, plays, sprites and playfields draw, sound CPU streaming, one vblank ack per frame. Not accurate yet: 81–91 % of pixels match MAME on most frames and two sampled frames are badly wrong. Still in `releases/experimental/`. |
+| *Elevator Action Returns* | **~80 %** | **Runs** — boots, plays, sprites and playfields draw, sound CPU streaming, one vblank ack per frame. All five sampled frames now match MAME pixel for pixel across the full 232-line visarea. Still in `releases/experimental/`: the pivot layer is a mirror, and five frames are not a game. |
 
 Percentages are judgement, not arithmetic; the rows either side of them are
 the evidence.
@@ -345,12 +345,35 @@ from each other by remarkably little. From MAME's driver:
 
 **Elevator Action Returns runs** — it boots, plays, and draws sprites and
 playfields, with the sound CPU streaming and one vblank acknowledge per
-frame. It is still in `releases/experimental/` because it is not accurate
-yet: measured against MAME frame by frame (`make -C sim ear-mix-all`), 81–91 %
-of pixels match on most frames and two of the five sampled frames are badly
-wrong. It is a second game running on this core, not a finished port.
+frame. All five sampled frames now match MAME pixel for pixel across the
+full 232-line visarea (`make -C sim ear-pipe-all`, 74,240 pixels each). It
+stays in `releases/experimental/` because five frames are not a game and the
+pivot layer is still a mirror rather than real RAM.
 
-Two things had to be built for it, and both are instructive about why Ray
+Getting there turned up a pattern worth naming: **every one of its rendering
+defects was a Ray Force dimension frozen into the RTL as a constant.** The
+board is one chipset running 35 games, so anything sized from a ROM region or
+a visarea has to be a parameter.
+
+- **Graphics codes were 14 bits.** That is exactly right for Ray Force, whose
+  sprite and tile regions hold 16,384 elements each — and wrong for Elevator
+  Action, whose regions are 4 MB and hold 32,768. MAME builds a 17-bit sprite
+  code and uses all 16 bits of the tile word. The visible symptom was oddly
+  specific: on the character-select screen every panel, bar and glyph was
+  perfect while the three portraits drew as scattered fragments of in-game
+  sprites, because 60 of the 72 over-limit sprites in that frame *were* the
+  portraits.
+- **The sprite cull window was hardcoded twice**, in the list walker and
+  again in the row expander, to Ray Force's 224 lines from line 31. Elevator
+  Action shows 232 from line 24, so every sprite row on the 8 lines outside
+  that window was silently dropped. Both now follow the `vis_mode` the game
+  config byte already carried.
+- **The bench never looked.** `sim/pipe_tb.cpp` compared Ray Force's window
+  whatever game it was handed, so those 8 lines went unchecked — widening it
+  is what exposed the cull bug at all. A bench with one game's dimensions
+  baked in cannot fail on the lines it never reads.
+
+Two things also had to be built for it, and both are instructive about why Ray
 Force never needed them:
 
 - **Real pivot (pixel-layer) RAM.** Ray Force only ever *clears* that RAM, so

@@ -20,6 +20,53 @@ the board's sound is MAME's, sample for sample, for the first time.** The story 
 
 ---
 
+## 2026-08-29 — Elevator Action Returns renders exactly (commit 603d965)
+
+All five sampled EAR frames now match MAME pixel for pixel across the **full
+232-line visarea** (74,240 px each), where before four matched partially over
+224 lines and one sat at 77.5 %. Ray Force is unaffected: `pipe-all` 19/19,
+`mix-all` 19/19, `spr-ghost` OK, and `spr-line-all`'s one frame-4200 used-flag
+diff (0 pixel diffs) is byte-identical on the parent commit.
+
+**All three defects were the same thing: a Ray Force dimension frozen into
+the RTL as a constant.**
+
+1. **Graphics code width, 14 bits.** Ray Force's sprite and tile regions hold
+   16,384 elements, so 14 bits is exactly right for it. EAR's are 4 MB =
+   32,768. MAME builds a 17-bit sprite code (`spr[0] | ((spr[5]&1)<<16)`) and
+   uses all 16 bits of `tilep[1]`, wrapping `% nelem`. Widened to 15 bits
+   through `sl_d`, both gfx buses and the playfield fetch.
+   *How it presented*: on the character-select screen every panel, bar and
+   glyph was perfect while the three portraits drew as scattered in-game
+   sprite fragments — 60 of the 72 over-limit sprites in frame 2400 were the
+   portraits. A layer-by-layer render (`F3_ONLY`) proved the whole screen is
+   sprites, which is what pointed at the sprite code rather than the mixer.
+2. **Sprite cull bounds, hardcoded TWICE** — `rf_video_spr_list`'s `Y0/Y1`
+   and `rf_video_spr`'s `VY0/VY1`, both 31..254 (f3_224a). EAR is 24..255, so
+   sprite rows on the 8 lines outside that window were dropped. Fixing only
+   the first changes nothing; the second is the per-row clip matching the
+   model's `_drawgfx`. Both now follow `vis_mode`.
+3. **The bench never checked those 8 lines.** `sim/pipe_tb.cpp` used Ray
+   Force's 224-line window for every game. `F3_V0`/`F3_V1` now set it and
+   drive the RTL's `vis_mode`; widening the window is what exposed defect 2.
+   New targets: `make -C sim ear-pipe-all ear-spr-line-all`.
+
+**Two things checked and found NOT to be bugs**, recorded so they are not
+re-investigated: EAR's ensoniq ROMs load at 0 and 0x400000 in MAME, which
+looks like our MRA packs them wrongly — but Ray Force has the identical
+layout and verified-exact sound, and `rf_smp_bus` maps ES5505 banks
+contiguously across the 4 MB region, so the packing is right. And the tile
+code never exceeds 14 bits in any dumped frame of either game, so the
+tilemap half of the widening is insurance, not a fix.
+
+Also fixed: the three Ray Force MRAs contained literal `\n` text where
+newlines belonged, left by an earlier scripted edit. The part stream is
+byte-identical after the fix, so the download checksums the self test
+expects are unchanged (verified by comparing the parsed part list with
+`git show HEAD:`).
+
+---
+
 ## Morning summary (written 2026-08-28 ~00:40, B7 still compiling)
 
 What changed overnight, shortest form. Every step's numbers are in the table
