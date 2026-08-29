@@ -201,6 +201,10 @@ module rf_video_spr
     logic        wb, rb;                // write (prepass) / read (draw) bank
     logic  [4:0] penmask_r;
     logic        flip_r;
+    // Published continuously rather than registered again: two always_ff
+    // blocks assigning it is a multiple-driver error in Quartus (Verilator
+    // only warns), and flip_r already holds exactly the value.
+    assign o_flipscreen = flip_r;
 
     // the draw's run table: {end, base} per line, written by the prefix
     // pass into bank wb, read by the draw at {rb, nxt} -- data the cycle
@@ -436,6 +440,7 @@ module rf_video_spr
             pst <= P_IDLE;
             wb  <= 1'b0; rb <= 1'b1;
             nspr <= 11'd0;
+            flip_r <= 1'b0; penmask_r <= 5'h0F;
         end else if (frame_start) begin
             // publish the bank just built, start filling the other
             rb <= wb;
@@ -463,7 +468,6 @@ module rf_video_spr
                 if (wk_done) begin
                     penmask_r <= wk_penmask;
                     flip_r    <= wk_flip;
-                    o_flipscreen <= wk_flip;
                     wk_fin    <= 1'b1;
                 end
                 if ((wk_done || wk_fin) && clr_i[8]) begin
@@ -588,7 +592,7 @@ module rf_video_spr
 
         if (reset) begin
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
-            active <= 1'b0; nxt <= 9'd0; par <= 1'b0; o_flipscreen <= 1'b0;
+            active <= 1'b0; nxt <= 9'd0; par <= 1'b0;
             for (int b = 0; b < NB; b++) begin
                 span_lo[b] <= 9'd511; span_hi[b] <= 9'd0;      // empty
             end
