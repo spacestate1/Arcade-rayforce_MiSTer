@@ -36,6 +36,11 @@ module rf_selftest #(
     input  logic        dl_active,
     input  logic        dl_seen,
     // per-game expectations (0 = not measured for this game; see below)
+    // which game the MRA says this is (Rayforce.sv "GAME CONFIG" bits 7:6).
+    // Row 0 of the page is the game's name, not the core's history: the
+    // titles live after the visible rows in rf_selftest_page.
+    input  logic  [1:0] game_id,
+
     input  logic [31:0] exp_bytes,
     input  logic [31:0] exp_sum,
     input  logic [31:0] exp_bist,
@@ -230,7 +235,8 @@ module rf_selftest #(
         u_col_q <= u_col;
         u_row_q <= u_row;
     end
-    assign pg_b_addr = 11'(u_row * ST_COLS + u_col);
+    wire [4:0] b_row_eff = (u_row == 0) ? 5'(ST_ROWS + game_id) : 5'(u_row);
+    assign pg_b_addr = 11'(b_row_eff * ST_COLS + u_col);
 
     wire       u_in_val = ST_VAL_ROWS[u_row_q] &&
                           (u_col_q >= ST_VAL_C0) && (u_col_q < ST_VAL_C0 + ST_VAL_W);
@@ -259,7 +265,8 @@ module rf_selftest #(
     wire [2:0] gcol  = xn[2:0];
     wire [2:0] grow  = yv[2:0];
 
-    assign pg_a_addr = 11'(row_n * ST_COLS + col_n);
+    wire [4:0] a_row_eff = (row_n == 0) ? 5'(ST_ROWS + game_id) : 5'(row_n);
+    assign pg_a_addr = 11'(a_row_eff * ST_COLS + col_n);
     always_comb row_a = row_n;
 
     wire       a_in_val = ST_VAL_ROWS[row_n] &&

@@ -20,7 +20,9 @@ ST_C0, ST_W = 26, 4         # PASS / FAIL / WAIT / BUSY
 # in the value-row list; rf_selftest.sv selects on the row number directly, so
 # the two only have to agree on the row numbers below.
 PAGE = [
-    ("RAY FORCE / GUNLOCK   TAITO F3 CORE", 0, 0),
+    ("TAITO F3 CORE", 0, 0),          # row 0 is REPLACED at render time by the
+                                     # game name below, chosen by the MRA's
+                                     # game-config byte; this is the fallback
     ("SELF TEST",                           0, 0),
     ("-- LOAD AND FETCH -------------------", 0, 0),
     ("ROM BYTES",                           1, 1),
@@ -52,6 +54,20 @@ PAGE = [
 
 assert len(PAGE) == ROWS, f"{len(PAGE)} rows, expected {ROWS}"
 
+# One title per game id (Rayforce.sv "GAME CONFIG", bits 7:6). The core runs a
+# Taito F3 BOARD, so the page should say which game is in it rather than
+# whichever game the core was first written for. Appended after the visible
+# rows; rf_selftest reads row 0 from here instead of from the page itself.
+NAMES = [
+    "RAY FORCE / GUNLOCK   TAITO F3 CORE",
+    "ELEVATOR ACTION RETURNS  TAITO F3",
+    "TAITO F3 CORE  (GAME 2)",
+    "TAITO F3 CORE  (GAME 3)",
+]
+assert len(NAMES) == 4
+for n in NAMES:
+    assert len(n) <= COLS, f"title too long: {n!r}"
+
 
 def main():
     val_mask = 0
@@ -73,9 +89,17 @@ def main():
                 raise SystemExit(f"row {r} col {c}: {ch!r} is outside the font")
             cells.append(code)
 
+    # the per-game titles live after the visible rows
+    for n in NAMES:
+        for ch in n.ljust(COLS):
+            code = ord(ch) - 0x20
+            if not 0 <= code < 64:
+                raise SystemExit(f"title char {ch!r} outside the font")
+            cells.append(code)
+
     out = []
     out.append("//" + "=" * 74)
-    out.append("//  Ray Force - static text of the core self-test page")
+    out.append("//  Taito F3 - static text of the core self-test page")
     out.append("//")
     out.append("//  GENERATED FILE -- do not edit by hand.")
     out.append("//  Produced by tools/make_selftest_page.py")
@@ -109,7 +133,9 @@ def main():
     out.append(f"    logic [5:0] rom [0:{len(cells)-1}];")
     out.append("")
     out.append("    initial begin")
-    for r, (text, _, _) in enumerate(PAGE):
+    labels = [t for t, _, _ in PAGE] + [f"title, game id {i}: {n}"
+                                       for i, n in enumerate(NAMES)]
+    for r, text in enumerate(labels):
         out.append(f"        // row {r:2d}: {text!r}")
         base = r * COLS
         for c in range(COLS):
