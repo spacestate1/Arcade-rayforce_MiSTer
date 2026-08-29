@@ -521,6 +521,18 @@ Taito F3 board, and MAME's per-game video config is *identical* to Gunlock's
 | Ensoniq samples | 4 MB | 4 MB (same layout) |
 | Total download | 11.5 MB | **18.5 MB** |
 
+**Two rows of that table were the whole rendering bug (fixed 2026-08-29,
+commit 603d965).** The doubled gfx regions mean 32,768 elements where Ray
+Force has 16,384, so the RTL's 14-bit graphics codes reached exactly half of
+Elevator Action's sprite and tile ROM -- MAME builds a 17-bit sprite code and
+uses all 16 bits of the tile word. And the different visible raster was
+hardcoded in two places in the sprite engine, dropping every sprite row on
+the 8 lines outside Ray Force's window. The information needed to predict
+both was already in this table; the lesson is to grep the RTL for a game's
+dimensions as literals whenever a row here differs, rather than waiting for
+the picture to look wrong. Both now follow the MRA's game-config byte.
+
+
 **Correction, measured the same day: the pivot layer is NOT a blocker for
 this game.** The first probe counted *writes carrying non-zero data* and said
 98,304 of them -- but sampling the RAM's live contents tells a different

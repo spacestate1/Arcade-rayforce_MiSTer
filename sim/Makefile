@@ -138,7 +138,7 @@ ear-mix: obj_dir/mixtb
 	F3_FLIP=0 ./obj_dir/mixtb ../dump/ear $(EAR_FRAME) mix_ref_ear.txt mix_out_ear.txt
 
 ear-mix-all: obj_dir/mixtb
-	@for f in 600 900 1200 1800 2400; do \
+	@for f in $(EAR_FRAMES); do \
 	  printf 'frame %5s: ' $$f; \
 	  F3_VIS=f3 python3 gen_mix_ref.py ../dump/ear $$f > mix_ref_ear.txt 2>/dev/null; \
 	  F3_FLIP=0 ./obj_dir/mixtb ../dump/ear $$f mix_ref_ear.txt mix_out_ear.txt 2>&1 | grep -E 'identical' | tail -1; \
@@ -149,7 +149,13 @@ ear-mix-all: obj_dir/mixtb
 # (224 from 31), so both the bench window (F3_V0/F3_V1, F3_VIS) and the RTL's
 # own sprite cull (F3_VISMODE / the vis_mode port) have to say so. Running it
 # with Ray Force's window hides every defect in the 8 lines outside it.
-EAR_FRAMES = 600 900 1200 1800 2400
+# every dumped frame whose two predecessors are also dumped (sprite lag 2)
+EAR_FRAMES = $(shell ls ../dump/ear/f3_*_frame.argb 2>/dev/null | \
+  sed 's|.*f3_0*\([0-9]*\)_frame.argb|\1|' | \
+  while read f; do \
+    [ -f ../dump/ear/f3_$$(printf '%05d' $$((f-1)))_frame.argb ] && \
+    [ -f ../dump/ear/f3_$$(printf '%05d' $$((f-2)))_frame.argb ] && echo $$f; \
+  done)
 
 ear-pipe-all: obj_dir/pipetb
 	@for f in $(EAR_FRAMES); do \
