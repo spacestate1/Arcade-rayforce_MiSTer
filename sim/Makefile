@@ -28,7 +28,8 @@ VERILATOR ?= verilator
 VFLAGS = -DVERILATOR --cc --exe --build -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 RTL = ../rtl
 
-.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw clean
+.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw \
+        ear-mix ear-mix-all ear-pipe-all ear-spr-line-all clean
 
 gfx: obj_dir/gfxtb
 	./obj_dir/gfxtb ../dump fetched.txt
@@ -141,6 +142,29 @@ ear-mix-all: obj_dir/mixtb
 	  printf 'frame %5s: ' $$f; \
 	  F3_VIS=f3 python3 gen_mix_ref.py ../dump/ear $$f > mix_ref_ear.txt 2>/dev/null; \
 	  ./obj_dir/mixtb ../dump/ear $$f mix_ref_ear.txt mix_out_ear.txt 2>&1 | grep -E 'identical' | tail -1; \
+	done
+
+# ---- Elevator Action Returns --------------------------------------------
+# EAR uses the base f3 visarea (232 lines from 24), not Ray Force's f3_224a
+# (224 from 31), so both the bench window (F3_V0/F3_V1, F3_VIS) and the RTL's
+# own sprite cull (F3_VISMODE / the vis_mode port) have to say so. Running it
+# with Ray Force's window hides every defect in the 8 lines outside it.
+EAR_FRAMES = 600 900 1200 1800 2400
+
+ear-pipe-all: obj_dir/pipetb
+	@for f in $(EAR_FRAMES); do \
+	  printf 'frame %5s: ' $$f; \
+	  F3_VIS=f3 python3 gen_pipe_ref.py ../dump/ear $$f > pipe_ref_ear_$$f.txt; \
+	  F3_V0=24 F3_V1=256 ./obj_dir/pipetb ../dump/ear $$f pipe_ref_ear_$$f.txt \
+	      pipe_out_ear_$$f.ppm 2>&1 | tail -1 || exit 1; \
+	done
+
+ear-spr-line-all: obj_dir/sprlinetb
+	@for f in $(EAR_FRAMES); do \
+	  printf 'frame %5s: ' $$f; \
+	  F3_VIS=f3 python3 gen_spr_fb_ref.py ../dump/ear $$f > spr_fb_ref_ear_$$f.txt; \
+	  F3_VISMODE=3 ./obj_dir/sprlinetb ../dump/ear $$f spr_fb_ref_ear_$$f.txt \
+	      2>&1 | tail -1 || exit 1; \
 	done
 
 spr-ghost: obj_dir/sprlinetb spr_fb_ref_3000.txt spr_fb_ref_300.txt

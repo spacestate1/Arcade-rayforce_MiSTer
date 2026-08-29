@@ -104,11 +104,22 @@ int main(int argc, char** argv) {
     long long cyc = 0;
 
     // rayforce_video's counters, verbatim
-    const int H_TOTAL = 432, H_START = 46, H_END = 366, V_START = 31, V_END = 255;
+    // Ray Force's f3_224a window by default; Elevator Action Returns uses
+    // the base f3 raster (232 lines from 24), so the window is settable --
+    // otherwise a game's top and bottom lines are never compared.
+    //     F3_V0=24 F3_V1=256 ./obj_dir/pipetb ../dump/ear ...
+    const int H_TOTAL = 432, H_START = 46, H_END = 366;
+    const int V_START = getenv("F3_V0") ? atoi(getenv("F3_V0")) : 31;
+    const int V_END   = getenv("F3_V1") ? atoi(getenv("F3_V1")) : 255;
+    const int V_H     = V_END - V_START;
+    // the sprite cull inside the pipe needs the same window: 0 f3_224a,
+    // 1 f3_224b, 2 f3_224c, 3 f3 (Elevator Action Returns)
+    const int VIS_MODE = (V_START == 31) ? 0 : (V_START == 32) ? 1
+                       : (V_END == 248)  ? 2 : 3;
     const int V_TOTAL = rate60 ? 257 : 262;
     int div = 0, hcnt = 0, vcnt = 0;
 
-    std::vector<uint32_t> fb(320 * 224, 0);
+    std::vector<uint32_t> fb(320 * V_H, 0);
     int frames_done = 0;
 
     auto step = [&]() {
@@ -142,7 +153,7 @@ int main(int argc, char** argv) {
         // arcade_video samples RGB_in on ce_pix, which is high during div 0
         if (div == 0) {
             int x = hcnt - H_START, y = vcnt - V_START;
-            if (x >= 0 && x < 320 && y >= 0 && y < 224) fb[y * 320 + x] = t->rgb;
+            if (x >= 0 && x < 320 && y >= 0 && y < V_H) fb[y * 320 + x] = t->rgb;
         }
         // advance the raster the way rayforce_video does
         if (div == 7) {
@@ -154,6 +165,8 @@ int main(int argc, char** argv) {
         div = (div + 1) & 7;
         cyc++;
     };
+
+    t->vis_mode = VIS_MODE;
 
     t->reset = 1; t->flip = 1; t->rate_60 = rate60;
     for (int w = 0; w < 4; w++) { t->ctrl0[w] = ctrl[2 * w] | ((uint32_t)ctrl[2 * w + 1] << 16);
@@ -169,7 +182,7 @@ int main(int argc, char** argv) {
            t->dbg_lines, t->dbg_fetch, t->dbg_max, t->dbg_nz, t->dbg_spr, t->dbg_rec);
 
     FILE* o = fopen(outp, "wb");
-    fprintf(o, "P6\n320 224\n255\n");
+    fprintf(o, "P6\n320 %d\n255\n", V_H);
     for (auto v : fb) { unsigned char p[3] = {(unsigned char)(v >> 16), (unsigned char)(v >> 8), (unsigned char)v}; fwrite(p, 1, 3, o); }
     fclose(o);
 

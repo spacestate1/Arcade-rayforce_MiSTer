@@ -52,7 +52,17 @@ module rf_video_pipe
     // video control registers 0x660000-1F
     input  logic [7:0][15:0] ctrl0,
     input  logic [7:0][15:0] ctrl1,
-    input  logic        flip,          // flipscreen (sprite command bit 13)
+    // Flipscreen DEFAULT only. The live value comes from the sprite command
+    // word via the sprite engine (`flip_eff` below) -- MAME takes
+    // m_flipscreen from exactly that bit, and it must follow the game: Ray
+    // Force sets it permanently, Elevator Action Returns does not, and this
+    // core used to wire it to a constant 1, which rendered that game upside
+    // down. The port is what the layers use until the first prepass has run.
+    input  logic        flip,
+
+    // which F3 visarea this game uses -- the sprite cull needs it, or the
+    // lines outside Ray Force's 224-line window are dropped
+    input  logic  [1:0] vis_mode,
 
     // video RAM read ports (B side of the CPU's BRAMs)
     output logic [14:0] line_addr,
@@ -179,7 +189,7 @@ module rf_video_pipe
     rf_video_line line (
         .clk(clk), .reset(reset),
         .frame_start(frame_start), .line_start(dec_start),
-        .y(flip ? (8'd255 - bld_y) : bld_y),
+        .y(flip_eff ? (8'd255 - bld_y) : bld_y),
         .extend(1'b1), .busy(line_busy),
         .lr_addr(line_addr), .lr_q(line_q),
         .clip_l(clip_l), .clip_r(clip_r), .blend(blend), .x_sample(x_sample),
@@ -200,7 +210,7 @@ module rf_video_pipe
     end
 
     // ---- playfields + tile fetch -----------------------------------------
-    logic [13:0] gfx_code; logic [3:0] gfx_row;
+    logic [14:0] gfx_code; logic [3:0] gfx_row;
     logic gfx_req, gfx_valid, gfx_busy;
     logic [95:0] gfx_pix;
     logic pf_rd_start, pf_rd_step;
@@ -209,7 +219,7 @@ module rf_video_pipe
 
     rf_video_pf pf (
         .clk(clk), .reset(reset),
-        .frame_start(frame_start), .ctrl0(ctrl0), .flip(flip),
+        .frame_start(frame_start), .ctrl0(ctrl0), .flip(flip_eff),
         .line_start(pf_go), .screen_y(bld_y),
         .colscroll(colscroll), .x_scale(x_scale), .y_scale(y_scale),
         .rowscroll(rowscroll), .mosaic_en(pf_mosaic), .x_sample(x_sample),
@@ -237,7 +247,7 @@ module rf_video_pipe
 
     rf_video_pivot pivot (
         .clk(clk), .reset(reset),
-        .frame_start(frame_start), .ctrl1(ctrl1), .flip(flip),
+        .frame_start(frame_start), .ctrl1(ctrl1), .flip(flip_eff),
         .line_start(pf_go), .screen_y(bld_y),
         .pivot_control(pivot_control), .mosaic_en(pivot_mosaic), .x_sample(x_sample),
         .busy(pv_busy),
@@ -255,6 +265,9 @@ module rf_video_pipe
     // samples it at smp_x for the line it is composing.
     logic        spr_prepass_busy, spr_line_busy;
     logic  [8:0] spr_lines_done;
+    logic        spr_flipscreen;
+    // the game's own bit once the prepass has read it; the port until then
+    wire         flip_eff = spr_flipscreen;
     logic [15:0] spr_rec_peak, spr_rec_drop;
     // peak-hold accumulators for the two sprite rows (see frame_end below)
     logic [15:0] h_spr_max, h_late, h_rec_max, h_drop;
@@ -270,9 +283,10 @@ module rf_video_pipe
     wire   [8:0] smp_x;
 
     rf_video_spr sprites (
-        .clk(clk), .reset(reset), .clk_ram(clk_ram),
+        .clk(clk), .reset(reset), .clk_ram(clk_ram), .vis_mode(vis_mode),
         .frame_start(frame_start), .prepass_busy(spr_prepass_busy),
         .line_busy(spr_line_busy), .lines_done(spr_lines_done),
+        .o_flipscreen(spr_flipscreen),
         .rec_peak(spr_rec_peak), .rec_drop(spr_rec_drop),
         .spr_addr(spr_addr), .spr_q(spr_q),
         .ch_a_lo_addr(spr_a_lo_addr), .ch_a_lo_dout(spr_a_lo_dout), .ch_a_lo_req(spr_a_lo_req), .ch_a_lo_ready(spr_a_lo_ready),

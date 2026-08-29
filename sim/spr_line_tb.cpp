@@ -107,6 +107,9 @@ int main(int argc, char** argv) {
         cyc++;
     };
 
+    // F3 visarea, same encoding as rf_video_spr_list: 0 f3_224a (Ray
+    // Force), 3 f3 (Elevator Action Returns). The cull bounds follow it.
+    t->vis_mode = getenv("F3_VISMODE") ? atoi(getenv("F3_VISMODE")) : 0;
     t->reset = 1; t->frame_start = 0;
     t->rd_x = 0; t->rd_line = 0;
     for (int i = 0; i < 6; i++) step();

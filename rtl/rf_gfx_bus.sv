@@ -48,7 +48,7 @@ module rf_gfx_bus
     input  logic        reset,
 
     // ---- request port (cpu domain) --------------------------------------
-    input  logic [13:0] code,          // tile number, already masked to the
+    input  logic [14:0] code,          // tile number, already masked to the
                                        // 16384 elements the region holds
     input  logic  [3:0] row,           // tile row 0-15, flipy already applied
     input  logic        req,           // one-cycle pulse
@@ -114,8 +114,8 @@ module rf_gfx_bus
             hi_got    <= 1'b0;
         end else if (!busy) begin
             if (req) begin
-                ch_lo_addr <= BASE_LO + {6'd0, code, row, 2'b00};
-                ch_hi_addr <= BASE_HI + {7'd0, code, row[3:1], 2'b00};
+                ch_lo_addr <= BASE_LO + {5'd0, code, row, 2'b00};
+                ch_hi_addr <= BASE_HI + {6'd0, code, row[3:1], 2'b00};
                 r_row      <= row;
                 ch_lo_req  <= 1'b1;
                 ch_hi_req  <= 1'b1;

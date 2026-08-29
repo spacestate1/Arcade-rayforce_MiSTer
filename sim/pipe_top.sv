@@ -58,7 +58,8 @@ module pipe_top (
     output logic [31:0] dbg_max,
     output logic [31:0] dbg_nz,
     output logic [31:0] dbg_spr,
-    output logic [31:0] dbg_rec
+    output logic [31:0] dbg_rec,
+    input  logic  [1:0] vis_mode
 );
 
     logic [26:1] a_lo_addr, a_hi_addr, b_lo_addr, b_hi_addr;
@@ -70,7 +71,7 @@ module pipe_top (
         .clk(clk), .reset(reset), .clk_ram(clk_ram),
         .div(div), .hcnt(hcnt), .vcnt(vcnt),
         .hblank(hblank), .vblank(vblank), .rate_60(rate_60),
-        .ctrl0(ctrl0), .ctrl1(ctrl1), .flip(flip),
+        .ctrl0(ctrl0), .ctrl1(ctrl1), .flip(flip), .vis_mode(vis_mode),
         .line_addr(line_addr), .line_q(line_q),
         .pf_addr(pf_addr),     .pf_q(pf_q),
         .pal_addr(pal_addr),   .pal_q(pal_q),

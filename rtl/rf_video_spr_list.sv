@@ -29,6 +29,12 @@ module rf_video_spr_list
     input  logic        clk,
     input  logic        reset,
 
+    // which F3 visarea this game uses -- the cull below rejects sprites
+    // that fall outside it, so a window narrower than the game's real one
+    // silently loses the top and bottom lines (Elevator Action Returns
+    // shows 232 lines where Ray Force shows 224).
+    input  logic  [1:0] vis_mode,
+
     input  logic        start,          // pulse: begin a walk (in vblank)
     input  logic        start_bank,     // engine bank entering the frame (0)
     output logic        busy,
@@ -55,9 +61,18 @@ module rf_video_spr_list
     output logic               s_fy,
     output logic        [1:0]  s_pri
 );
-    // visible-area cull bounds, .8 fixed (VIS_X0/1 = 46/365, VIS_Y0/1 = 31/254)
+    // visible-area cull bounds, .8 fixed (VIS_X0/1 = 46/365 for every game).
+    // The vertical pair follows vis_mode, matching rayforce_video's crop and
+    // f3_render.py's _VIS table:
+    //   0 f3_224a 31..254   1 f3_224b 32..255
+    //   2 f3_224c 24..247   3 f3      24..255
     localparam signed [31:0] X0 = 32'sd11776, X1 = 32'sd93440;   // 46<<8, 365<<8
-    localparam signed [31:0] Y0 = 32'sd7936,  Y1 = 32'sd65024;   // 31<<8, 254<<8
+    wire [8:0] vy0 = (vis_mode == 2'd0) ? 9'd31 :
+                     (vis_mode == 2'd1) ? 9'd32 : 9'd24;
+    wire [8:0] vy1 = (vis_mode == 2'd0) ? 9'd254 :
+                     (vis_mode == 2'd2) ? 9'd247 : 9'd255;
+    wire signed [31:0] Y0 = $signed({23'd0, vy0}) <<< 8;
+    wire signed [31:0] Y1 = $signed({23'd0, vy1}) <<< 8;
 
     // ---- engine state ----------------------------------------------------
     logic [9:0]  offs;

@@ -1050,7 +1050,7 @@ rf_video_pipe vpipe
     .clk(clk_sys), .reset(reset), .clk_ram(clk_ram),
     .div(vid_div), .hcnt(vid_hcnt), .vcnt(vid_vcnt),
     .hblank(hblank), .vblank(vblank), .rate_60(rate_60),
-    .ctrl0(vctrl0), .ctrl1(vctrl1), .flip(1'b1),
+    .ctrl0(vctrl0), .ctrl1(vctrl1), .flip(1'b1), .vis_mode(cfg_vis),
     .line_addr(v_line_addr), .line_q(v_line_q),
     .pf_addr(v_pf_addr),     .pf_q(v_pf_q),
     .pal_addr(v_pal_addr),   .pal_q(v_pal_q),

@@ -54,7 +54,10 @@
       <part name="d66-25.ic35" crc="e08653ee" map="1000"/>
     </interleave>
 
-    <!-- pad: maincpu 1 MB -> 2 MB -->\n    <part repeat="1048576">00</part>\n\n    <!-- audiocpu 68000: ROM_LOAD16_BYTE pair -->
+    <!-- pad: maincpu 1 MB -> 2 MB -->
+    <part repeat="1048576">00</part>
+
+    <!-- audiocpu 68000: ROM_LOAD16_BYTE pair -->
     <interleave output="16">
       <part name="d66-23.ic10" crc="57fb7c49" map="01"/>
       <part name="d66-22.ic23" crc="83dd7f9b" map="10"/>
@@ -66,19 +69,31 @@
       <part name="d66-04.ic46" crc="c1c7aaa7" map="10"/>
     </interleave>
 
-    <!-- pad: sprites 2 MB -> 4 MB -->\n    <part repeat="2097152">00</part>\n\n    <!-- sprites_hi -->
+    <!-- pad: sprites 2 MB -> 4 MB -->
+    <part repeat="2097152">00</part>
+
+    <!-- sprites_hi -->
     <part name="d66-05.ic47" crc="a3cefe04"/>
 
-    <!-- pad: sprites_hi 1 MB -> 2 MB -->\n    <part repeat="1048576">00</part>\n\n    <!-- tilemap: ROM_LOAD32_WORD pair -->
+    <!-- pad: sprites_hi 1 MB -> 2 MB -->
+    <part repeat="1048576">00</part>
+
+    <!-- tilemap: ROM_LOAD32_WORD pair -->
     <interleave output="32">
       <part name="d66-06.ic48" crc="b3d8126d" map="0021"/>
       <part name="d66-07.ic49" crc="a6da9be7" map="2100"/>
     </interleave>
 
-    <!-- pad: tilemap 2 MB -> 4 MB -->\n    <part repeat="2097152">00</part>\n\n    <!-- tilemap_hi -->
+    <!-- pad: tilemap 2 MB -> 4 MB -->
+    <part repeat="2097152">00</part>
+
+    <!-- tilemap_hi -->
     <part name="d66-08.ic50" crc="9959f30b"/>
 
-    <!-- pad: tilemap_hi 1 MB -> 2 MB -->\n    <part repeat="1048576">00</part>\n\n    <!-- ensoniq sample ROMs, plain -->
+    <!-- pad: tilemap_hi 1 MB -> 2 MB -->
+    <part repeat="1048576">00</part>
+
+    <!-- ensoniq sample ROMs, plain -->
     <part name="d66-01.ic2" crc="58c92efa"/>
     <part name="d66-02.ic3" crc="dcdafaab"/>
   </rom>

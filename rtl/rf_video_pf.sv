@@ -74,7 +74,7 @@ module rf_video_pf
     input  logic [15:0] pf_q,
 
     // tile fetch (rf_gfx_bus)
-    output logic [13:0] gfx_code,
+    output logic [14:0] gfx_code,
     output logic  [3:0] gfx_row,
     output logic        gfx_req,
     input  logic [95:0] gfx_pix,
@@ -438,7 +438,7 @@ module rf_video_pf
                 // the pending slot must be free to catch this row if it lands
                 // early, and rf_gfx_bus drops a req while busy
                 if (!gfx_busy && !pend_v) begin
-                    gfx_code <= pf_q[13:0];
+                    gfx_code <= pf_q[14:0];
                     gfx_row  <= py ^ {4{attr[15]}};
                     gfx_req  <= 1'b1;
                     bst      <= B_WAIT;

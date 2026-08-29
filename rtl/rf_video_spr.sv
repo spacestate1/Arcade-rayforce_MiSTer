@@ -87,11 +87,21 @@ module rf_video_spr
     input  logic        reset,
     input  logic        clk_ram,
 
+    // which F3 visarea this game uses; feeds the sprite cull bounds
+    input  logic  [1:0] vis_mode,
+
     input  logic        frame_start,    // swap banks, start a fresh prepass
     output logic        prepass_busy,
     output logic        line_busy,      // a line is being drawn (drops for
                                         // one cycle between lines)
     output logic  [8:0] lines_done,     // lines drawn so far this frame, 0-256
+    // The flipscreen bit, straight from the sprite command word (word 5 bit
+    // 13) -- the same place MAME takes m_flipscreen from. The playfields and
+    // the pivot layer need it too, and it must be the GAME's bit rather than
+    // a constant: Ray Force sets it permanently, Elevator Action Returns does
+    // not, and this core had it wired to 1, so that game rendered upside down.
+    output logic        o_flipscreen,
+
     output logic [15:0] rec_peak,       // records the last prepass built
     output logic [15:0] rec_drop,       // sprite rows it had no room for
 
@@ -122,7 +132,16 @@ module rf_video_spr
     output logic [15:0] rd_color,       // 0 = none
     output logic  [3:0] rd_used
 );
-    localparam int VX0 = 46, VX1 = 365, VY0 = 31, VY1 = 254;
+    // Visible span. X is the same for every F3 game; the Y pair is the
+    // game's visarea and MUST follow vis_mode -- it is the per-row clip that
+    // matches the model's _drawgfx, so a window narrower than the game's
+    // real one silently drops sprite rows on the lines outside it (Elevator
+    // Action Returns shows 24..255 where Ray Force shows 31..254).
+    localparam int VX0 = 46, VX1 = 365;
+    wire [8:0] VY0 = (vis_mode == 2'd0) ? 9'd31 :
+                     (vis_mode == 2'd1) ? 9'd32 : 9'd24;
+    wire [8:0] VY1 = (vis_mode == 2'd0) ? 9'd254 :
+                     (vis_mode == 2'd2) ? 9'd247 : 9'd255;
     localparam int NSPR = 1024;
 
     // ---- the walker ------------------------------------------------------
@@ -137,7 +156,7 @@ module rf_video_spr
     logic        [1:0]  s_pri;
 
     rf_video_spr_list walker (
-        .clk(clk), .reset(reset),
+        .clk(clk), .reset(reset), .vis_mode(vis_mode),
         .start(wk_start), .start_bank(1'b0), .busy(wk_busy), .done(wk_done),
         .o_flip(wk_flip), .o_extra(wk_extra), .o_penmask(wk_penmask),
         .spr_addr(spr_addr), .spr_q(spr_q),
@@ -147,9 +166,9 @@ module rf_video_spr
 
     // ---- stored sprite list, split by consumer ---------------------------
     // sl_y: {ty[17:0], sy[8:0], fy}                 -- the expand (prepass)
-    // sl_d: {tx[17:0], sx[8:0], code[13:0], color[7:0], fx} -- the draw
+    // sl_d: {tx[17:0], sx[8:0], code[14:0], color[7:0], fx} -- the draw
     (* ramstyle = "MLAB, no_rw_check" *) logic [27:0] sl_y [0:NSPR-1];
-    (* ramstyle = "MLAB, no_rw_check" *) logic [49:0] sl_d [0:1][0:NSPR-1];
+    (* ramstyle = "MLAB, no_rw_check" *) logic [50:0] sl_d [0:1][0:NSPR-1];
     logic [10:0] nspr;
 
     // ---- bucket store, double banked: a COUNTING SORT ---------------------
@@ -209,7 +228,8 @@ module rf_video_spr
     logic [RW-1:0] c_rd, f_rd, l_rd;    // MLAB reads, taken the cycle before use
 
     wire signed [24:0] ex_dy   = ex_dy8 >>> 8;
-    wire               ex_inr  = (ex_dy >= VY0) && (ex_dy <= VY1);
+    wire               ex_inr  = (ex_dy >= $signed({16'd0, VY0})) &&
+                                 (ex_dy <= $signed({16'd0, VY1}));
     wire  [7:0]        ex_dyb  = ex_dy[7:0];
     wire  [3:0]        ex_srow = ex_yy[3:0] ^ {4{ex_fy}};
 
@@ -257,10 +277,10 @@ module rf_video_spr
     wire        [3:0]  rc_srow = rc_w[3:0];
     logic       [9:0]  sidx_r;
     always_ff @(posedge clk) sidx_r <= rc_sidx;
-    wire [49:0]        sd_w    = sl_d[rb][sidx_r];
-    wire signed [17:0] sd_tx   = sd_w[49:32];
-    wire        [8:0]  sd_sx   = sd_w[31:23];
-    wire       [13:0]  sd_code = sd_w[22:9];
+    wire [50:0]        sd_w    = sl_d[rb][sidx_r];
+    wire signed [17:0] sd_tx   = sd_w[50:33];
+    wire        [8:0]  sd_sx   = sd_w[32:24];
+    wire       [14:0]  sd_code = sd_w[23:9];
     wire        [7:0]  sd_col  = sd_w[8:1];
     wire               sd_fx   = sd_w[0];
     wire signed [17:0] sd_x8   = sd_tx + 18'sd128;
@@ -282,7 +302,7 @@ module rf_video_spr
     logic              fc_ok;            // fc's two-deep lookup has settled
 
     // ---- sprite gfx fetch, two buses ------------------------------------
-    logic [1:0][13:0] gfx_code;
+    logic [1:0][14:0] gfx_code;
     logic [1:0][3:0]  gfx_row;
     logic [1:0]       gfx_req, gfx_valid, gfx_busy;
     logic [1:0][95:0] gfx_pix;
@@ -433,7 +453,7 @@ module rf_video_spr
             P_WALK: begin
                 if (s_valid && nspr < 11'(NSPR)) begin
                     sl_y[nspr]     <= {s_ty, s_sy, s_fy};
-                    sl_d[wb][nspr] <= {s_tx, s_sx, s_code[13:0], s_color, s_fx};
+                    sl_d[wb][nspr] <= {s_tx, s_sx, s_code[14:0], s_color, s_fx};
                     nspr <= nspr + 11'd1;
                 end
                 if (!clr_i[8]) begin
@@ -443,6 +463,7 @@ module rf_video_spr
                 if (wk_done) begin
                     penmask_r <= wk_penmask;
                     flip_r    <= wk_flip;
+                    o_flipscreen <= wk_flip;
                     wk_fin    <= 1'b1;
                 end
                 if ((wk_done || wk_fin) && clr_i[8]) begin
@@ -567,7 +588,7 @@ module rf_video_spr
 
         if (reset) begin
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
-            active <= 1'b0; nxt <= 9'd0; par <= 1'b0;
+            active <= 1'b0; nxt <= 9'd0; par <= 1'b0; o_flipscreen <= 1'b0;
             for (int b = 0; b < NB; b++) begin
                 span_lo[b] <= 9'd511; span_hi[b] <= 9'd0;      // empty
             end
