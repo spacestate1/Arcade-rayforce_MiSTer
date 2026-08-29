@@ -511,9 +511,33 @@ module rf_main
         .b_addr(v_line_addr), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
         .b_q(v_line_q));
 
-    // pivot RAM stub: reads as zero on both sides (see pivot_wr_cnt above)
-    assign pivot_q   = 16'h0000;
-    assign v_pivot_q = 16'h0000;
+    // ---- pivot (pixel-layer) RAM ----------------------------------------
+    // 8 KB of real RAM, MIRRORED eight times across the 64 KB window, not the
+    // 64 KB the board has. Why both halves of that sentence:
+    //
+    //  - It must be REAL, because Elevator Action Returns' power-on self test
+    //    walks every RAM on the board writing FFFF/AAAA/5555/0000 and reading
+    //    each location straight back. Against the old read-as-zero stub it
+    //    wrote FFFF to 0x630000, read 0, and stopped in its error handler --
+    //    which is exactly where that game sat until this was fixed
+    //    (2026-08-29; the circular write ring is what finally showed it).
+    //
+    //  - It is MIRRORED because 64 KB is 51 M10Ks and the device has 20 left.
+    //    The test verifies each location immediately after writing it, so an
+    //    aliased window passes: nothing is written, then re-read later, at an
+    //    address that has since been overwritten through the alias. A test
+    //    that filled the region and verified afterwards WOULD fail, and this
+    //    comment is here so that is the first thing checked if it ever does.
+    //
+    // Ray Force is unaffected either way: it only ever clears this RAM, which
+    // is what `pivot_wr_cnt` (the PIVOT WR self-test row) counts and proves
+    // on every run.
+    rf_bram_tdp #(.AW(12)) u_pivot (
+        .clk(clk),
+        .a_addr(a[12:1]), .a_wdata(cpu_dout), .a_wren(cpu_wr && sel_pivot && clkena),
+        .a_be(be), .a_q(pivot_q),
+        .b_addr(v_pivot_addr[11:0]), .b_wdata(16'd0), .b_wren(1'b0), .b_be(2'b00),
+        .b_q(v_pivot_q));
 
     // ---- read mux --------------------------------------------------------
     // Registered one cycle to line up with the BRAM output, exactly like the
