@@ -212,7 +212,13 @@ localparam CONF_STR = {
     "-;",
     "O[15],Pause When OSD Open,Off,On;",
     "O[2],Service Mode,Off,On;",
-    "O[3],Self Test,On,Off;",
+    // "Off" MUST stay first. MiSTer's status word powers up at 0, so the
+    // FIRST entry is what a fresh core load gets -- and with "On" first this
+    // core booted into the diagnostic page instead of the game, which is how
+    // v1.1 shipped. A released core boots to the GAME; the self test is
+    // something you ask for. (The Raiden 2 core carries the same note, after
+    // the same mistake.)
+    "O[3],Self Test,Off,On;",
     "O[5:4],UART Debug,Self Test,Audio Ring,Write Ring,Sound Ring;",
     "-;",
     "R[0],Reset;",
@@ -317,13 +323,13 @@ wire bus_reset = status[0] | buttons[1] | ~pll_locked;
 // use: a forward reference at module scope becomes an implicit 1-bit net,
 // which would silently truncate uart_mode to one bit and gate the wrong
 // producer (the failure class the Raiden II core hit twice).
-//   O[3]   Self Test    0 = show the page (default), 1 = show game video
+//   O[3]   Self Test    0 = game video (default), 1 = show the page
 //   O[5:4] UART Debug   0 = self-test page (default), 1 = off, 2 = the
 //                       Phase 0/1 write-ring dump (rf_write_compare.py).
 //                       On by default: the OSD cannot be driven remotely, and
 //                       a debug channel that has to be switched on by hand at
 //                       the cabinet is not much of a debug channel.
-wire       selftest_on = ~status[3];
+wire       selftest_on = status[3];
 wire [1:0] uart_mode   = status[5:4];
 wire       uart_log_txd, uart_ring_txd;
 
@@ -1071,7 +1077,7 @@ rf_video_pipe vpipe
 // character port, so what comes out of /dev/ttyS1 is the page, character for
 // character -- no second copy of the formatting to keep in step.
 //
-//   O[3]   Self Test    0 = show the page (default), 1 = show game video
+//   O[3]   Self Test    0 = game video (default), 1 = show the page
 //   O[5:4] UART Debug   0 = self-test page (default), 1 = off, 2 = the
 //                       Phase 0/1 write-ring dump (rf_write_compare.py).
 //                       On by default: the OSD cannot be driven remotely, and

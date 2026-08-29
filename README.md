@@ -65,6 +65,12 @@ row and shows wrong graphics.
 | 93C46 settings EEPROM + NVRAM save | Working (see *Saving settings*) |
 | SDRAM, ROM loading | Working — 12 MB, verified by an on-core checksum every load |
 
+> **If you are running v1.1:** it boots into the diagnostic page instead of
+> the game. MiSTer's status word powers up at 0 and the OSD's `Self Test`
+> option had `On` as its first entry, so a fresh load got the self test.
+> Turn **Self Test** to `Off` in the OSD, or use a build after this note --
+> the default is fixed and a released core now boots to the game.
+
 ## Known problems
 
 1. **Sprites can be missing or partial in busy scenes — boss transitions,
