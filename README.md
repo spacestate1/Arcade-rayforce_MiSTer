@@ -108,6 +108,36 @@ row and shows wrong graphics.
 6. The pivot/pixel layer stub is the one thing that ties this core to Ray
    Force — see [Other F3 games](#other-f3-games).
 
+## What is verified, and what is not
+
+The core is checked against MAME, so it is worth being precise about which
+parts of MAME that covers. Measured over **7,680 line-configurations across
+30 dumped frames** of Ray Force:
+
+| F3 feature | Ray Force uses it | State here |
+|---|---|---|
+| Line zoom (per-line X/Y scale) | **Heavily** — 7,485 of 30,720 playfield-lines at a scale other than 1:1 | Verified: the 15 pixel-identical frames include it |
+| Blending modes 1 and 2 | **Rarely** — 120 of 30,720 playfield-lines (0.4 %) | Exercised but thinly. The likeliest place for an unnoticed difference |
+| Column scroll, per-line priority, palette offset | Constantly | Verified |
+| Mosaic | **Never** (`x_sample_enable` false on every line) | Implemented, follows the model, but has no dump coverage |
+| Clip planes | **Never** (no plane ever set) | Implemented; MAME's several-inverted-planes case is deliberately not reproduced |
+| Pivot / pixel layer | Only cleared, never drawn | Stubbed, and a self-test row counts non-zero writes every run |
+| Sprite trails | Never | Not implemented |
+
+The MAME source this was written against is **current**: `taito_f3_v.cpp` and
+`taito_f3.h` are byte-identical to MAME master as of this release, including
+the April 2024 video rewrite, and `taito_f3.cpp` differs only in API
+tidy-ups and manufacturer strings — nothing behavioural, and nothing that
+touches Gunlock/Ray Force.
+
+Uncertainties inherited from MAME, which no amount of diffing against it can
+resolve, all flagged in its own source: `0x0800` marking the VRAM layer
+opaque and `0x2000` enabling "garbage pixels" are both marked *unemulated*;
+the priority-conflict behaviour where "the second layer can reset part of the
+state" is described as a hardware feature-or-bug; and the timer register at
+`0x4C0000` that configures a pseudo-hblank interrupt is a TODO. Ray Force
+writes 0 to that last one, so it costs nothing here.
+
 ## How to use it
 
 1. Copy `releases/Rayforce_20260828.rbf` to `/media/fat/_Arcade/cores/` on the
