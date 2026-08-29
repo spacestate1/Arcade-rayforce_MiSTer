@@ -198,9 +198,12 @@ assign BUTTONS   = 0;
 // F3 boards have no DIP switches: game settings live in the service menu
 // (Service Mode below is the cabinet TEST switch) and in the 93C46 EEPROM.
 // Bits 2-5 are the debug options and predate the video ones; they keep their
-// numbers so a saved Rayforce.CFG still means the same thing.
+// numbers so a saved config still means the same thing. NOTE: the core
+// was called Rayforce until 2026-08-28; MiSTer names the saved settings
+// after the core, so an existing Rayforce.CFG is not carried over and
+// this core starts from defaults once.
 localparam CONF_STR = {
-    "Rayforce;;",
+    "TaitoF3;;",
     "-;",
     "O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
     "O[7:6],Rotate,CW (TATE),CCW,None;",

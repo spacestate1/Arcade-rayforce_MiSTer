@@ -3,7 +3,7 @@
   <setname>elvactr</setname>
   <year>1994</year>
   <manufacturer>Taito</manufacturer>
-  <rbf>Rayforce</rbf>
+  <rbf>TaitoF3</rbf>
   <players>2</players>
   <joystick>8-way</joystick>
   <rotation>horizontal</rotation>
@@ -73,7 +73,7 @@
     <part name="e02-05.39" crc="eb729855"/>
   </rom>
 
-  <!-- Game config (Rayforce.sv "GAME CONFIG"):
+  <!-- Game config (TaitoF3.sv "GAME CONFIG"):
          bit [1:0] = 3  visarea f3 (232 lines from line 24)
          bit [7:6] = 1  game id: expectations for this set are not
                         measured yet, so the ROM-checksum rows of the

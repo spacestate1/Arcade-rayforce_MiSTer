@@ -5,8 +5,8 @@
     .venv/bin/python3 tools/rf_deploy.py --no-load  # upload only
 
 Plain ssh key auth does not work on this board -- use paramiko with the
-password, which is what this does. The MRA's <rbf>Rayforce</rbf> matches any
-cores/Rayforce*.rbf, and MiSTer takes the last one by name, so the uploaded
+password, which is what this does. The MRA's <rbf>TaitoF3</rbf> matches any
+cores/TaitoF3*.rbf, and MiSTer takes the last one by name, so the uploaded
 file is named with a timestamp and sorts newest-last.
 """
 import argparse
@@ -25,7 +25,7 @@ HOST = os.environ.get("RF_HOST", "172.17.1.164")
 USER = os.environ.get("RF_USER", "root")
 PASSWORD = os.environ.get("RF_PASS", "1")
 MRA = "/media/fat/_Arcade/Ray Force.mra"
-RBF = "output_files/Rayforce.rbf"
+RBF = "output_files/TaitoF3.rbf"
 
 
 def connect():
@@ -55,7 +55,7 @@ def main():
         sys.exit(f"{rbf} not found -- run ./build.sh first")
 
     c = connect()
-    name = "Rayforce_%s.rbf" % datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    name = "TaitoF3_%s.rbf" % datetime.datetime.now().strftime("%Y%m%d_%H%M")
     sftp = c.open_sftp()
     sftp.put(rbf, f"/media/fat/_Arcade/cores/{name}")
     if args.mra:

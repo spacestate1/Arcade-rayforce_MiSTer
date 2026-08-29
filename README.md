@@ -38,7 +38,7 @@ have both been checked against MAME rather than by eye:
 - **On hardware**: the core's own audio capture (see *Audio Ring* below)
   **correlates 1.000 with MAME's mix** at the same instant of the same track.
 
-The released build (`releases/Rayforce_20260828.rbf`, build stamp
+The released build (`releases/TaitoF3_20260828.rbf`, build stamp
 **28165741**) passes every self-test row on a DE10-Nano. It is built from the
 tree at commit `be6737c`; the handful of commits after that are diagnostic
 and documentation changes that have not been compiled into a bitstream.
@@ -110,7 +110,7 @@ row and shows wrong graphics.
 
 ## How to use it
 
-1. Copy `releases/Rayforce_20260828.rbf` to `/media/fat/_Arcade/cores/` on the
+1. Copy `releases/TaitoF3_20260828.rbf` to `/media/fat/_Arcade/cores/` on the
    MiSTer SD card.
 2. Copy the `.mra` you want from `releases/` to `/media/fat/_Arcade/`.
    (`releases/experimental/` is work in progress and does not boot — see the
@@ -219,6 +219,14 @@ python3 tools/rf_uart.py -t 12          # the page, over the serial port
 sound-chip write ring, and the **Audio Ring** — a capture of the core's own
 audio output, which `tools/rf_audio_match.py` correlates against MAME's mix.
 That is how "the sound is right" was established without an ear in the room.
+
+## A note on the name
+
+The core is **TaitoF3**, not Rayforce: it is the board, and Ray Force is the
+game it runs. It was called `Rayforce` up to 2026-08-28, so if you used an
+earlier build, note that MiSTer names its saved settings after the core —
+this one starts from defaults rather than inheriting your old `Rayforce.CFG`,
+and the bitstream is now `TaitoF3.rbf`, which is what the MRAs ask for.
 
 ## Building it yourself
 

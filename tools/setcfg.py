@@ -10,7 +10,7 @@ val = int(sys.argv[1], 16)
 val1 = int(sys.argv[2], 16) if len(sys.argv) > 2 else None
 c = d.connect()
 sftp = c.open_sftp()
-path = "/media/fat/config/Rayforce.CFG"
+path = "/media/fat/config/TaitoF3.CFG"
 try:
     cur = bytearray(sftp.open(path, "rb").read())
 except IOError:
@@ -21,4 +21,4 @@ if val1 is not None:
     cur[1] = val1 & 0xff
 sftp.open(path, "wb").write(bytes(cur))
 sftp.close(); c.close()
-print(f"Rayforce.CFG[0] = {val:02x}" + (f", [1] = {val1:02x}" if val1 is not None else ""))
+print(f"TaitoF3.CFG[0] = {val:02x}" + (f", [1] = {val1:02x}" if val1 is not None else ""))
