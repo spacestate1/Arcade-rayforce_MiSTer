@@ -124,6 +124,34 @@ parts of MAME that covers. Measured over **7,680 line-configurations across
 | Pivot / pixel layer | Only cleared, never drawn | Stubbed, and a self-test row counts non-zero writes every run |
 | Sprite trails | Never | Not implemented |
 
+### Two Ray Force-specific gaps, from MAME's own notes
+
+Searching MAME's source and issue history for this game rather than for the
+board turns up two things that matter here, both confirmed against our dumps:
+
+**1. The palette-add effect is implemented but never verified.** MAME's PR
+#10943 ("line ram palette add effect") names **"rayforce stage 5 intro"** as
+a place it is used. This core implements it (`pf_pal_add`, the line-RAM
+0x9000 section), but **every one of the 30,720 playfield-lines in the dumped
+frames has `pal_add = 0`** — the dumps are boot, title and attract, and
+stage 5 is deep in a play session. So the code is there, follows the model,
+and has never been compared against MAME on a frame that actually uses it.
+Dumping a stage 5 intro frame and running `make -C sim mix-all` against it is
+the single most valuable verification left for this game.
+
+**2. An unknown palette bit that MAME names Gunlock for.** In the 0x6400
+effect field, MAME comments `x8xx = ??? seems to affect the palette of a
+single layer(??) (gunlock)` and notes `gunlock:78` — and its code logs
+"unknown effect bits set" for anything that is not 0x70, i.e. **for Gunlock's
+0x78**. MAME does not emulate it (`palette interpretation [unimplemented]`).
+Our dumps only ever show `0x00` (7,650 lines) and the benign `0x70` (30
+lines), so the scene that sets 0x78 is not covered here either. This core
+latches the field and, like MAME, acts on none of it — so we match MAME, and
+both may differ from the real board in whatever scene sets that bit.
+
+Neither is a defect against MAME. Both are places where "pixel-identical to
+MAME" is a narrower claim than it sounds.
+
 The MAME source this was written against is **current**: `taito_f3_v.cpp` and
 `taito_f3.h` are byte-identical to MAME master as of this release, including
 the April 2024 video rewrite, and `taito_f3.cpp` differs only in API
