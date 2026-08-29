@@ -39,7 +39,7 @@ rm -f "$LOG"
 # (this systemd is too old for -p OOMScoreAdjust).
 systemd-run --user --scope --quiet \
     -p MemoryHigh=11G -p MemoryMax=11G -p CPUWeight=100 \
-    choom -n 1000 -- nice -n 5 quartus_sh --flow compile TaitoF3 > "$LOG" 2>&1 &
+    choom -n 1000 -- nice -n 5 quartus_sh --flow compile Rayforce > "$LOG" 2>&1 &
 BUILD_PID=$!
 
 # Progress monitor: watch the log for phase transitions
@@ -87,8 +87,8 @@ echo
 echo "build exited with rc=$RC"
 tail -5 "$LOG"
 
-RPT=output_files/TaitoF3.sta.rpt
-[ -f output_files/TaitoF3.rbf ] || { echo "GATE FAIL: no rbf produced"; exit 1; }
+RPT=output_files/Rayforce.sta.rpt
+[ -f output_files/Rayforce.rbf ] || { echo "GATE FAIL: no rbf produced"; exit 1; }
 [ -f "$RPT" ]                    || { echo "GATE FAIL: no sta.rpt"; exit 1; }
 
 # TEMPORARY: allow the build to pass despite timing failure so the spike can
@@ -99,9 +99,9 @@ if grep -q "Timing requirements not met" "$RPT"; then
     echo "WARNING: timing not met (slack = $(grep 'Worst-case setup slack' $RPT | awk '{print $5}'))"
     echo "         The spike may still work -- this is a test build, not production."
     echo "GATE PASS (with timing warning)"
-    md5sum output_files/TaitoF3.rbf
+    md5sum output_files/Rayforce.rbf
     exit 0
 fi
 
 echo "GATE PASS: timing met."
-md5sum output_files/TaitoF3.rbf
+md5sum output_files/Rayforce.rbf

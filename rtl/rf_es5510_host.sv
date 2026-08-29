@@ -13,7 +13,7 @@
 //  storage for the GPR file (0xC0 x 24 bits), the instruction memory (0xA0
 //  x 48 bits) and the special registers 0xEA-0xFF -- and NO execution: the
 //  DSP program never runs, the delay DRAM does not exist (reads give 0),
-//  and the audio takes the pump's dry path (a sum) in TaitoF3.sv. Running
+//  and the audio takes the pump's dry path (a sum) in Rayforce.sv. Running
 //  the DSP is Phase 3 stage 4, if the reverb is ever missed.
 //============================================================================
 
