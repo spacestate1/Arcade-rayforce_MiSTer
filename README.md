@@ -18,7 +18,7 @@ and listed under [Other F3 games](#other-f3-games) rather than guessed at.
 | **Ray Force** (US) | **~90 %** | Plays with sound. Every self-test row passes on hardware; video pixel-identical to MAME, audio sample-exact. Held back from "done" by the sprite overrun in busy scenes (Known problems #1), the ES5510 stub, and the fact that nobody has played it start to finish. |
 | **Gunlock** (World) | **~85 %** | Same board and the same ROMs bar one program chip, so everything above should apply — but the MRA has never been loaded on a board. Untested, not unlikely. |
 | **Ray Force** (Japan) | **~85 %** | As Gunlock. |
-| *Elevator Action Returns* | **~40 %** | Loads and verifies but does **not** boot — it stops in its own power-on self test. In `releases/experimental/`. See [Other F3 games](#other-f3-games). |
+| *Elevator Action Returns* | **~65 %** | **Runs** — boots, plays, sprites and playfields draw, sound CPU streaming, one vblank ack per frame. Not accurate yet: 81–91 % of pixels match MAME on most frames and two sampled frames are badly wrong. Still in `releases/experimental/`. |
 
 Percentages are judgement, not arithmetic; the rows either side of them are
 the evidence.
@@ -343,15 +343,32 @@ from each other by remarkably little. From MAME's driver:
   Road)**, which is what decides how many games a given SDRAM module can hold.
   Ray Force is 11.5 MB as this core loads it.
 
-**Elevator Action Returns is in the tree as a work in progress and does NOT
-boot yet** — `releases/experimental/` rather than `releases/`, so nobody
-loads it expecting a game. Everything up to the point of running works and is
-verified: its ROMs load byte-perfect against values computed offline from the
-MRA, and the 68020 executes its first 4096 bus writes identically to MAME,
-byte lanes included. It then stops in the game's own power-on self test,
-parked in the `WORK RAM ERROR` handler at PC 0x01032C, so nothing is drawn
-and the sound CPU is never released. Two candidate causes have been tested on
-hardware and eliminated. The full trail is in `HANDOFF.md`.
+**Elevator Action Returns runs** — it boots, plays, and draws sprites and
+playfields, with the sound CPU streaming and one vblank acknowledge per
+frame. It is still in `releases/experimental/` because it is not accurate
+yet: measured against MAME frame by frame (`make -C sim ear-mix-all`), 81–91 %
+of pixels match on most frames and two of the five sampled frames are badly
+wrong. It is a second game running on this core, not a finished port.
+
+Two things had to be built for it, and both are instructive about why Ray
+Force never needed them:
+
+- **Real pivot (pixel-layer) RAM.** Ray Force only ever *clears* that RAM, so
+  a read-as-zero stub survived — and its 64 KB of block RAM was spent on the
+  sound board instead. Elevator Action's power-on self test writes
+  `FF/AA/55/00` to every RAM and reads each location straight back; a stub
+  cannot pass that. It now has 8 KB mirrored across the 64 KB window, because
+  64 KB is 51 M10Ks and about 20 were free. The mirror passes because the test
+  verifies each location immediately after writing it.
+- **The watchdog.** Elevator Action's boot deliberately parks at a `BRA.S *`
+  with interrupts masked and waits for the TC0640FIO watchdog to reboot the
+  board — traced in MAME, it sits there about two seconds, resets, re-runs its
+  self test and carries on. This core ignored writes to `0x4A0000` entirely,
+  so it hung there forever. Ray Force never depends on that path.
+
+Both failures were silent hangs rather than error messages, and the game's own
+error handler is generic enough to point at the wrong RAM, which is why this
+took a while. The full trail is in `HANDOFF.md`.
 
 So most of what a second game needs is four small parameters, which belong in
 the MRA rather than in the RTL. The real work is one architectural item:

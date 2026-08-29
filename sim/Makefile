@@ -126,6 +126,23 @@ spr-line: obj_dir/sprlinetb spr_fb_ref.txt
 # ghost regression: a busy frame (3000, 198 sprites) followed by a quiet one
 # (300). The line buffer is never cleared, so frame 300 must show none of
 # frame 3000's pixels -- it did before the frame-parity tag (2026-08-28).
+# Elevator Action Returns against MAME. Its visible raster is the base f3 one
+# (232 lines from line 24), so the model needs F3_VIS=f3 or every comparison
+# is off by seven lines and reads as a total mismatch.
+#   make ear-mix              one frame
+#   make ear-mix EAR_FRAME=1800
+EAR_FRAME ?= 600
+ear-mix: obj_dir/mixtb
+	F3_VIS=f3 python3 gen_mix_ref.py ../dump/ear $(EAR_FRAME) > mix_ref_ear.txt
+	./obj_dir/mixtb ../dump/ear $(EAR_FRAME) mix_ref_ear.txt mix_out_ear.txt
+
+ear-mix-all: obj_dir/mixtb
+	@for f in 600 900 1200 1800 2400; do \
+	  printf 'frame %5s: ' $$f; \
+	  F3_VIS=f3 python3 gen_mix_ref.py ../dump/ear $$f > mix_ref_ear.txt 2>/dev/null; \
+	  ./obj_dir/mixtb ../dump/ear $$f mix_ref_ear.txt mix_out_ear.txt 2>&1 | grep -E 'identical' | tail -1; \
+	done
+
 spr-ghost: obj_dir/sprlinetb spr_fb_ref_3000.txt spr_fb_ref_300.txt
 	./obj_dir/sprlinetb ../dump 3000 spr_fb_ref_3000.txt 300 spr_fb_ref_300.txt
 

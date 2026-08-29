@@ -41,7 +41,25 @@ NUM_PF, NUM_SP, NUM_CLIP = 4, 4, 4
 EXTEND = True
 WIDTH_MASK = 0x3FF if EXTEND else 0x1FF
 VIS_X0, VIS_X1 = 46, 365
-VIS_Y0, VIS_Y1 = 31, 254
+
+# The vertical crop is the ONE thing that differs between the four Taito F3
+# machine configurations, and the model has to follow the game being dumped
+# or every comparison is off by a few lines and reads as a total mismatch:
+#
+#   f3_224a  31..254  224 lines   Ray Force / Gunlock   (the default)
+#   f3_224b  32..255  224 lines
+#   f3_224c  24..247  224 lines
+#   f3       24..255  232 lines   Elevator Action Returns
+#
+#   F3_VIS=f3 python3 ... , or F3_VIS=24,255
+import os as _os
+_VIS = {"f3_224a": (31, 254), "f3_224b": (32, 255),
+        "f3_224c": (24, 247), "f3": (24, 255)}
+_v = _os.environ.get("F3_VIS", "f3_224a")
+if _v in _VIS:
+    VIS_Y0, VIS_Y1 = _VIS[_v]
+else:
+    VIS_Y0, VIS_Y1 = (int(x) for x in _v.split(","))
 
 SPR_COLORBASE = 0x1000
 
