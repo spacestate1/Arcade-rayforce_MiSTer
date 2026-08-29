@@ -125,7 +125,12 @@ int main(int argc, char** argv) {
     };
 
     t->reset = 1; t->frame_start = 0; t->line_start = 0; t->mix_start = 0;
-    t->flip = 1; t->extend = 1;
+    // Flipscreen is the GAME's bit (sprite command word 5 bit 13), not a
+    // constant: Ray Force sets it permanently, Elevator Action Returns
+    // never does. It selects the line-RAM walk direction below, so a
+    // wrong value makes every line read the wrong control words.
+    const int flip = getenv("F3_FLIP") ? atoi(getenv("F3_FLIP")) : 1;
+    t->flip = flip; t->extend = 1;
     for (int w = 0; w < 4; w++) t->ctrl0[w] = ctrl[2 * w] | ((uint32_t)ctrl[2 * w + 1] << 16);
     for (int i = 0; i < 8; i++) step();
     t->reset = 0; step();
@@ -137,7 +142,7 @@ int main(int argc, char** argv) {
     int bad = 0, total = 0, shown = 0;
     for (int sy = 0; sy < 256; sy++) {
         cur_sy = sy;
-        t->screen_y = sy; t->lr_y = 255 - sy;
+        t->screen_y = sy; t->lr_y = flip ? (255 - sy) : sy;
         t->line_start = 1; step(); t->line_start = 0;
         long long c = 0;
         while (t->busy && c < 100000) { step(); c++; }

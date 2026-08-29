@@ -135,13 +135,13 @@ spr-line: obj_dir/sprlinetb spr_fb_ref.txt
 EAR_FRAME ?= 600
 ear-mix: obj_dir/mixtb
 	F3_VIS=f3 python3 gen_mix_ref.py ../dump/ear $(EAR_FRAME) > mix_ref_ear.txt
-	./obj_dir/mixtb ../dump/ear $(EAR_FRAME) mix_ref_ear.txt mix_out_ear.txt
+	F3_FLIP=0 ./obj_dir/mixtb ../dump/ear $(EAR_FRAME) mix_ref_ear.txt mix_out_ear.txt
 
 ear-mix-all: obj_dir/mixtb
 	@for f in 600 900 1200 1800 2400; do \
 	  printf 'frame %5s: ' $$f; \
 	  F3_VIS=f3 python3 gen_mix_ref.py ../dump/ear $$f > mix_ref_ear.txt 2>/dev/null; \
-	  ./obj_dir/mixtb ../dump/ear $$f mix_ref_ear.txt mix_out_ear.txt 2>&1 | grep -E 'identical' | tail -1; \
+	  F3_FLIP=0 ./obj_dir/mixtb ../dump/ear $$f mix_ref_ear.txt mix_out_ear.txt 2>&1 | grep -E 'identical' | tail -1; \
 	done
 
 # ---- Elevator Action Returns --------------------------------------------
