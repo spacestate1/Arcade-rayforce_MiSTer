@@ -49,7 +49,9 @@ module rf_gfx_bus
 
     // ---- request port (cpu domain) --------------------------------------
     input  logic [14:0] code,          // tile number, already masked to the
-                                       // 16384 elements the region holds
+                                       // 32768 elements the 4 MB region
+                                       // holds (Ray Force uses 16384 and
+                                       // never sets bit 14)
     input  logic  [3:0] row,           // tile row 0-15, flipy already applied
     input  logic        req,           // one-cycle pulse
     output logic [95:0] pix,           // 16 pixels, 6 bits each, pixel 0 low
