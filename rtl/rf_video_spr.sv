@@ -342,7 +342,16 @@ module rf_video_spr
     // It costs no memory: line[7:NBW] is 6 bits for NB = 4, so the tag is
     // still 7 bits and an entry still 20, i.e. NB x 512 x 20 bits = NB/2
     // M10Ks (2 banks were three M10Ks at 21 bits).
-    localparam int NB  = 4;
+    // NB = 8, not 4. Measured on the board in attract, 2026-08-28: the worst
+    // line needs 16567 clocks and the budget is 3456, so the draw has to bank
+    // slack across quiet lines. NB gives (NB-1) lines of it plus the line's
+    // own budget -- 13824 clocks at NB=4, which is UNDER the worst case, and
+    // the counters showed exactly that: late lines arriving in bursts (0 ->
+    // 4770 -> 6820) whenever a scene got busy, i.e. sprites missing or
+    // partial in the middle of a level and before the first boss. NB=8 gives
+    // 27648, comfortably past it. Costs 4 more M10Ks; the tag is unchanged
+    // because it is {par, line[7:NBW]}, still 7 bits.
+    localparam int NB  = 8;
     localparam int NBW = $clog2(NB);
 
     logic            wr_en;
