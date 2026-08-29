@@ -13,6 +13,17 @@ and listed under [Other F3 games](#other-f3-games) rather than guessed at.
 
 ## Status
 
+| Game | State | Where it stands |
+|---|---|---|
+| **Ray Force** (US) | **~90 %** | Plays with sound. Every self-test row passes on hardware; video pixel-identical to MAME, audio sample-exact. Held back from "done" by the sprite overrun in busy scenes (Known problems #1), the ES5510 stub, and the fact that nobody has played it start to finish. |
+| **Gunlock** (World) | **~85 %** | Same board and the same ROMs bar one program chip, so everything above should apply — but the MRA has never been loaded on a board. Untested, not unlikely. |
+| **Ray Force** (Japan) | **~85 %** | As Gunlock. |
+| *Elevator Action Returns* | **~40 %** | Loads and verifies but does **not** boot — it stops in its own power-on self test. In `releases/experimental/`. See [Other F3 games](#other-f3-games). |
+
+Percentages are judgement, not arithmetic; the rows either side of them are
+the evidence.
+
+
 **The game boots, plays at full speed, and has sound.** On a DE10-Nano every
 row of the core's built-in self test passes, and the picture and the audio
 have both been checked against MAME rather than by eye:
@@ -27,8 +38,16 @@ have both been checked against MAME rather than by eye:
 - **On hardware**: the core's own audio capture (see *Audio Ring* below)
   **correlates 1.000 with MAME's mix** at the same instant of the same track.
 
-The released build (`Rayforce_20260828.rbf`, stamp 28124835) **meets timing on
-every clock** and passes every self-test row on a DE10-Nano.
+The released build (`releases/Rayforce_20260828.rbf`, build stamp
+**28165741**) passes every self-test row on a DE10-Nano. It is built from the
+tree at commit `be6737c`; the handful of commits after that are diagnostic
+and documentation changes that have not been compiled into a bitstream.
+Verify what you downloaded with `python3 tools/check_files.py`.
+
+**The bitstream and the MRAs must come from the same release.** The SDRAM
+region layout changed when the core became a general F3 core, so an older
+bitstream with these MRAs (or the reverse) fails the `ROM BYTES` self-test
+row and shows wrong graphics.
 
 ## What the core covers
 
@@ -48,18 +67,45 @@ every clock** and passes every self-test row on a DE10-Nano.
 
 ## Known problems
 
-1. **The ES5510 DSP is not emulated**, only its host port. Measured impact:
+1. **Sprites can be missing or partial in busy scenes — boss transitions,
+   heavy attract moments.** This is the most visible defect in the core and
+   it is measured, not suspected. The sprite engine draws each screen line
+   into a ring of line buffers running ahead of the mixer; when a line's draw
+   misses its deadline the mixer composes that line anyway, with whatever
+   sprites had arrived. The core counts both, and leaving it in attract for a
+   couple of minutes shows:
+
+   ```
+   SPRLINE : LATE  3EFA182E      longest line 16122 clocks, 6190 late lines
+                                 (the per-line budget is 3456 clocks)
+   ```
+
+   Note what is NOT wrong: `SPR REC : DROP` stays at zero, so the sprite list
+   and the record store are keeping up — every sprite row the frame asked for
+   was built. It is the per-line **fetch and draw** that misses its deadline,
+   which points at SDRAM contention rather than at capacity.
+
+   You will see this as sprites flickering or vanishing for a frame where a
+   lot is on screen at once. It has been present in every build so far
+   (including the first release), and it went unnoticed because those
+   counters only arrived recently and every earlier reading was taken
+   seconds after a core load, when they are still zero. The Verilator bench
+   that models a hardware-like fetch turnaround (`make -C sim pipe-lat`)
+   reports **zero** late lines, so the bench's latency model is optimistic
+   and wants recalibrating against these numbers before anything is changed.
+
+2. **The ES5510 DSP is not emulated**, only its host port. Measured impact:
    the dry sampler mix correlates **0.95–0.99** with MAME's full output across
    the whole soundtrack, so what the DSP adds is at most a faint residual. If
    something sounds thin against MAME, this is why.
-2. **Sprites lag the playfields by one frame; MAME uses two.** Visible, if at
+3. **Sprites lag the playfields by one frame; MAME uses two.** Visible, if at
    all, as sprites leading the scroll by a frame.
-3. **NVRAM only saves when you open the OSD.** That is MiSTer's design, not
+4. **NVRAM only saves when you open the OSD.** That is MiSTer's design, not
    the core's — see *Saving settings*.
-4. **Untested on hardware**: the *Gunlock* and *Ray Force (Japan)* MRAs, the
+5. **Untested on hardware**: the *Gunlock* and *Ray Force (Japan)* MRAs, the
    60 Hz refresh option, and the analog stick. All three are built and
    believed correct; none has been exercised on a board.
-5. The pivot/pixel layer stub is the one thing that ties this core to Ray
+6. The pivot/pixel layer stub is the one thing that ties this core to Ray
    Force — see [Other F3 games](#other-f3-games).
 
 ## How to use it
@@ -67,6 +113,8 @@ every clock** and passes every self-test row on a DE10-Nano.
 1. Copy `releases/Rayforce_20260828.rbf` to `/media/fat/_Arcade/cores/` on the
    MiSTer SD card.
 2. Copy the `.mra` you want from `releases/` to `/media/fat/_Arcade/`.
+   (`releases/experimental/` is work in progress and does not boot — see the
+   README in there.)
 3. Put the MAME ROM zip in `/media/fat/games/mame/`. The MRAs accept
    `rayforce.zip` or `gunlock.zip` — parts are matched **by CRC**, so the
    layout inside the zip does not matter.
@@ -213,6 +261,16 @@ from each other by remarkably little. From MAME's driver:
 - **ROM footprint from 9.8 MB (Arkanoid Returns) to 49 MB (Kirameki Star
   Road)**, which is what decides how many games a given SDRAM module can hold.
   Ray Force is 11.5 MB as this core loads it.
+
+**Elevator Action Returns is in the tree as a work in progress and does NOT
+boot yet** — `releases/experimental/` rather than `releases/`, so nobody
+loads it expecting a game. Everything up to the point of running works and is
+verified: its ROMs load byte-perfect against values computed offline from the
+MRA, and the 68020 executes its first 4096 bus writes identically to MAME,
+byte lanes included. It then stops in the game's own power-on self test,
+parked in the `WORK RAM ERROR` handler at PC 0x01032C, so nothing is drawn
+and the sound CPU is never released. Two candidate causes have been tested on
+hardware and eliminated. The full trail is in `HANDOFF.md`.
 
 So most of what a second game needs is four small parameters, which belong in
 the MRA rather than in the RTL. The real work is one architectural item:

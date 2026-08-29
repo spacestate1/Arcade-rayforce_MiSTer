@@ -43,8 +43,11 @@ def md5(path):
 
 
 def shipped():
+    # releases/ only -- releases/experimental/ holds things that do not work
+    # yet and is deliberately not hashed or advertised
     return sorted(f for f in os.listdir(REL)
-                  if os.path.splitext(f)[1] in WHAT)
+                  if os.path.splitext(f)[1] in WHAT
+                  and os.path.isfile(os.path.join(REL, f)))
 
 
 def main():
