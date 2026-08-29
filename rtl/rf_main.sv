@@ -208,7 +208,7 @@ module rf_main
         .BarrelShifter(1), .MUL_Hardware(1)
     ) cpu (
         .clk(clk),
-        .nReset(~reset),
+        .nReset(~(reset | wd_rst)),
         .clkena_in(clkena),
         .data_in(cpu_din),
         .IPL(ipl),
@@ -295,6 +295,42 @@ module rf_main
         end
     end
 
+    // ---- watchdog (TC0640FIO) -------------------------------------------
+    // The F3 has one, MAME configures it (WATCHDOG_TIMER in taito_f3.cpp) and
+    // the games USE it: Elevator Action Returns' boot deliberately runs into
+    // a `BRA.S *` with interrupts masked (ORI #$0700,SR at 0x01014C) and
+    // relies on the watchdog to reboot the board out of it. Traced in MAME:
+    // it sits at PC 0x01016E for about two seconds, resets, re-runs POST and
+    // then reaches its main loop. Without a watchdog this core simply hung
+    // there forever, which is exactly what it did until 2026-08-29.
+    //
+    // Kicked by any write to 0x4A0000. Three seconds of silence resets the
+    // 68020 only -- not the core, not SDRAM, not the loaded ROM.
+    //
+    // Held off while `pause` is asserted: the OSD pause freezes the CPU, so
+    // it cannot kick, and a watchdog that fired then would reboot the game
+    // every time someone paused it.
+    localparam int WD_FRAMES = 180;             // ~3 s at 58.94 Hz
+    logic        wd_kick;
+    logic  [7:0] wd_cnt;
+    logic  [3:0] wd_hold;                       // reset pulse width
+    wire         wd_rst = |wd_hold;
+
+    always_ff @(posedge clk) begin
+        if (reset) begin
+            wd_cnt <= 8'd0; wd_hold <= 4'd0;
+        end else begin
+            if (wd_hold != 4'd0) wd_hold <= wd_hold - 4'd1;
+            if (wd_kick || pause) wd_cnt <= 8'd0;
+            else if (vbl_rise) begin
+                if (wd_cnt >= WD_FRAMES[7:0]) begin
+                    wd_cnt  <= 8'd0;
+                    wd_hold <= 4'hF;            // pulse the CPU reset
+                end else wd_cnt <= wd_cnt + 8'd1;
+            end
+        end
+    end
+
     // Acknowledge rate over a 64-frame window.
     logic  [5:0] rate_win;
     logic [15:0] i2_mark, i3_mark;
@@ -374,6 +410,7 @@ module rf_main
     end
 
     always_ff @(posedge clk) begin
+        wd_kick <= 1'b0;
         if (reset) begin
             coin_word0 <= 16'd0; coin_word1 <= 16'd0;
             {ee_cs, ee_sk, ee_di} <= 3'b000;
@@ -386,7 +423,8 @@ module rf_main
                     ee_sk <= cpu_dout[3];
                     ee_cs <= cpu_dout[4];
                 end
-                default: ;                                  // 4A0000 watchdog etc.
+                4'h0: wd_kick <= 1'b1;                      // 4A0000 watchdog
+                default: ;
             endcase
         end
     end
