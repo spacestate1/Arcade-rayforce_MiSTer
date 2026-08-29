@@ -59,6 +59,20 @@ contiguously across the 4 MB region, so the packing is right. And the tile
 code never exceeds 14 bits in any dumped frame of either game, so the
 tilemap half of the widening is insurance, not a fix.
 
+**The sprite row-usage flags over-report, harmlessly, and here is why.**
+`ear-spr-line-all` frame 4200 shows 0 pixel diffs and 8 used-flag diffs (Ray
+Force has the same on its own frame 4200, and had it before any of this).
+The model sets `row_usage[dy] |= bit` only inside `if c and not fbrow[dx]` --
+the sprite that actually *claims* the pixel. The RTL sets it whenever it
+writes a visible non-zero pen (`rf_video_spr.sv`, `dr_used <= dr_used | (1
+<< dr_pri)`), because it relies on draw order rather than a read-before-write
+to make the last writer win. So where sprites of different priority groups
+overlap, the RTL claims a group is present that contributes no visible pixel.
+The mixer then looks for that group's pixels, finds none, and produces the
+same colour -- which is why the pixel counts are exact and `pipe-all` /
+`ear-pipe-all` are 19/19 and 10/10. Making it exact needs a read-before-write
+in the draw loop; not worth the regression risk for no visible defect.
+
 Also fixed: the three Ray Force MRAs contained literal `\n` text where
 newlines belonged, left by an earlier scripted edit. The part stream is
 byte-identical after the fix, so the download checksums the self test
