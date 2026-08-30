@@ -211,6 +211,60 @@ both may differ from the real board in whatever scene sets that bit.
 Neither is a defect against MAME. Both are places where "pixel-identical to
 MAME" is a narrower claim than it sounds.
 
+### What MAME's own tracker says about this game
+
+Checked 2026-08-30. The rows still open are inherited by this core, because
+this core is written against MAME:
+
+| MAMETesters | State | What it means here |
+|---|---|---|
+| [08230](https://mametesters.org/view.php?id=8230) missing transparent shadows in **Area 4** | **open** | The `x8xx` bit above, in play rather than in a corner case. The reporter's analysis: it offsets a palette on playfield 4 only, by +0x10 on 4bpp tiles and +0x40 on 6bpp, and is masked by the layer beneath. **Area 4 will look like MAME and both will differ from a real board.** |
+| [07861](https://mametesters.org/view.php?id=7861) sound glitches after the first game over | **open** | Named in MAME's own `es5510.cpp` header. The ES5510 is a stub here, so this is likely reproduced or replaced by silence rather than fixed. |
+| [01920](https://mametesters.org/view.php?id=1920) enemy laser too short, stage 3 | fixed in 0.203 | Fixed by a **68020 `CMP2` opcode** correction. This core runs TG68K, not MAME's 68020 — TG68K implements `CMP2`/`CHK2` and carries its own bugfixes for them through 2020, but **stage 3 is the test of that**, and it has never been played here. |
+| [02527](https://mametesters.org/view.php?id=2527) square glitches on the title screen | fixed in 0.266 | Fixed by PR #11811, the video rewrite this core is written against, so it should not appear. |
+| [06794](https://mametesters.org/view.php?id=6794) screen flickering | not a bug | A 58.97 Hz game on a 60 Hz display. If you see flicker, try the OSD's **Refresh Rate** and your display's, before suspecting the core. |
+
+### What this core does NOT emulate that MAME also does not
+
+Everything in this list is unemulated in MAME too, so matching MAME says
+nothing about it. From MAME's own source:
+
+- **Video**: `0x0800` (VRAM layer opaque) and `0x2000` (enables "garbage
+  pixels") are both marked *unemulated*; the `0xf000` palette-RAM format,
+  the `0x6600` bg-palette field and the `0x7000` field are *unimplemented*;
+  the pixel layer's palette mirroring is an admitted **hack** keyed off the
+  scroll offset; there is a `TODO: determine when we can stop drawing`; and
+  sprite lag is a guess — *"presumably sprite lag is timing of sprite
+  ram/framebuffer access."*
+- **Sound**: *"ES5510 ESP emulation is not perfect"*, `TODO: ES5505 Volume
+  control is correct?`, and the ES5510's DRAM size is unverified.
+- **Board**: the `TC0650FDA` "Digital to Analog" chip — the part that does
+  the blending and RGB output — is not modelled as a device at all, and
+  `TC0640FIO` has a TODO to use the shared implementation.
+
+### What this core has that MAME does not
+
+Short list, and worth being accurate about: **this core is a subset of MAME's
+behaviour, not a superset.** Every graphics feature here was ported from MAME
+and checked against it. Two exceptions:
+
+- **The analog output stage.** MAME emulates the sound path to the MB87078
+  and stops. The real cabinet then runs that through an LM324 op-amp and a
+  power amplifier with a volume control — `taito_f3.cpp` says so explicitly,
+  and adds that *"in test mode, digital regulation hasn't effect"*. That
+  analog stage is the entire missing 25–30 dB, and **Audio Boost stands in
+  for it**. MAME leaves it to the host's volume control; a core has to put
+  it somewhere.
+- **Real fetch timing.** MAME renders a frame in one pass with no memory
+  model. This core has a raster, line buffers and a finite SDRAM budget, so
+  it can *miss a deadline* in a way MAME cannot — which is Known problem #1.
+  That is not extra fidelity, it is a real constraint the arcade board met
+  and this implementation does not yet.
+
+And one deliberate divergence: MAME's several-inverted-clip-planes case is
+not reproduced (`rf_video_mix.sv`). Ray Force never enables a clip plane, so
+it costs this game nothing.
+
 The MAME source this was written against is **current**: `taito_f3_v.cpp` and
 `taito_f3.h` are byte-identical to MAME master as of this release, including
 the April 2024 video rewrite, and `taito_f3.cpp` differs only in API

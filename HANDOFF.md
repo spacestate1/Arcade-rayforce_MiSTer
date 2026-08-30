@@ -28,6 +28,92 @@ the board's sound is MAME's, sample for sample, for the first time.** The story 
 
 ---
 
+## 2026-08-30 — What MAME does not emulate, and what this core does not inherit
+
+Research note, so the next session does not repeat the search. Sources are
+`reference/mame/` on disk (not in git) and MAMETesters, checked 2026-08-30.
+
+### The one that reaches ordinary play: MAMETesters 08230, OPEN
+
+**"gunlock, rayforcej, rayforce: Missing transparent shadows in Area 4."**
+Still open. The reporter's analysis names the same field this core already
+flags as unread: bit `x8xx` of the 0x6400 section of line RAM. Their findings,
+worth keeping because they are more than MAME's source says:
+
+- it offsets a palette, and only on playfield 4
+- the offset respects the tile's depth: +0x10 for 4bpp, +0x40 for 6bpp
+- it is masked by the layer beneath (possibly only by playfield 1), so on real
+  hardware it renders only where an upper layer exists, while in MAME it would
+  affect every pixel
+
+So **Area 4 of a normal playthrough is a place where "pixel-identical to MAME"
+and "identical to the arcade board" are known to differ**, and the difference
+is missing shadows. This belongs in the README's user-facing list, not only in
+the inherited-uncertainty paragraph, and it now is.
+
+### The rest of this game's tracker history
+
+| MAMETesters | State | Here |
+|---|---|---|
+| 07861 sound glitches after the first game over | **open** | Named in MAME's own `es5510.cpp` header. The ESP is a stub here. |
+| 01920 enemy laser too short in stage 3 | fixed 0.203 | Fixed by a **68020 CMP2 opcode** correction. We run TG68K, not MAME's core. TG68K does implement CMP2/CHK2 (`TG68KdotC_Kernel.vhd`, with dated bugfixes through 2020) -- but stage 3 has never been played on this core, and it is the direct test. |
+| 02527 square glitches on the title screen | fixed 0.266 | PR #11811, the video rewrite this core is written against. Should not appear; the title screen is in the dumped frames and is exact. |
+| 06794 screen flickering | closed, not a bug | 58.97 Hz game on a 60 Hz display. Relevant to the OSD Refresh Rate option before anyone blames the core. |
+| GitHub #10033 EAR: shooting ceiling lamps should darken the floor | closed | The reporter traced it to brightness values written to line RAM 0x6200, nibble-per-layer, "lights off" = 0xCBFB. Unemulated in MAME; would matter if Elevator Action Returns is ever finished. |
+
+### Unemulated in MAME, therefore unverifiable by diffing against it
+
+From `taito_f3_v.cpp` unless noted:
+
+- `0x0800` sets the VRAM layer opaque -- *[unemulated]*
+- `0x2000` enables "garbage pixels" for the line -- *[unemulated]*
+- `0xf000` palette RAM format -- *[unemulated]*
+- `0x6600` bg palette, `0x7000` "pivot enable" -- *[unimplemented]*, both logged
+- 12-bit palette games are a hardcoded per-game list with a
+  `TODO: seems to be selected on a line basis by 6400?`
+- the pixel layer's palette mirroring is an explicit **HACK** keyed off the
+  scroll offset, with a comment admitting it should dirty the layer and does not
+- `TODO: determine when we can stop drawing?` in the sprite walk
+- `TODO: presumably "sprite lag" is timing of sprite ram/framebuffer access` --
+  i.e. the lag values this core copies are themselves a guess in MAME
+- `taito_en.cpp`: *"ES5510 ESP emulation is not perfect"*, `TODO: ES5505
+  Volume control is correct?`, and "where does the MB8421 go?"
+- `es5510.cpp`: DRAM size unverified
+- `taito_f3.cpp`: `TC0650FDA` "Digital to Analog -- Blending and RGB output"
+  is listed as a board chip and modelled as no device at all; `TC0640FIO` has
+  a TODO to use the shared implementation
+
+### What this core has that MAME does not
+
+Being accurate matters here: **this core is a subset of MAME's behaviour, not
+a superset.** Every graphics feature was ported from MAME and checked against
+it, and the things above are unemulated in both. Two real exceptions:
+
+1. **The analog output stage.** `taito_f3.cpp` line 2355: *"Sound volume
+   regulation output is gained via common analog operational and power ic
+   amplification (LM324 and 1241). In test mode, digital regulation hasn't
+   effect, due to obvious reason."* MAME emulates to the MB87078 and stops,
+   leaving the rest to the host volume control. The board's own digital
+   output measures **-33.5 dBFS peak**, which is why both games sound almost
+   silent. Audio Boost is the stand-in for that missing amplifier -- not an
+   arbitrary loudness preference, a named component.
+2. **Real fetch timing.** MAME renders a frame in one pass with no memory
+   model at all. This core has a raster, a line-buffer ring and a finite
+   SDRAM budget, so it can miss a per-line deadline in a way MAME cannot.
+   That is not extra fidelity: it is a constraint the arcade board met and
+   this implementation does not yet, and it is Known problem #1.
+
+One deliberate divergence: MAME's several-inverted-clip-planes case is not
+reproduced (`rf_video_mix.sv`). Ray Force never enables a clip plane.
+
+### What this changes about the release
+
+"Video pixel-identical to MAME" stays true and stays the strongest claim
+available, but it is now bounded in writing by a *named, open* MAME bug in a
+scene players reach. The README says so.
+
+---
+
 ## 2026-08-30 — The board's verdict on ch7: two of three fixes land, one is wrong
 
 Build `29224005` (timing met on every clock; worst +0.011 ns on the HDMI
