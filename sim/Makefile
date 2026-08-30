@@ -33,7 +33,7 @@ VERILATOR ?= verilator
 VFLAGS = -DVERILATOR --cc --exe --build -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 RTL = ../rtl
 
-.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr-lat spr-rec spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw \
+.PHONY: ddr-sweep gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr-lat spr-rec spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw \
         ear-mix ear-mix-all ear-pipe-all ear-spr-line-all clean
 
 gfx: obj_dir/gfxtb
@@ -202,6 +202,18 @@ pipe: obj_dir/pipetb pipe_ref.txt
 
 # every frame whose two predecessors were dumped (the sprite lag), each
 # against its own reference
+# The DDR3 model's latency gate. Exact from 4 to 400 cycles with the port
+# stalled up to 1-in-2; at LAT<=2 -- returns faster than the HPS DDR3
+# controller can physically answer (~10+ cycle round trip) -- 12 pixels on
+# the first three visible lines differ. Documented rather than hidden: it is
+# outside the port's envelope, but it is not understood, and if a sprite
+# corner ever misbehaves at the TOP of the screen on hardware, start here.
+ddr-sweep: obj_dir/pipetb
+	@for cfg in "4 7" "12 7" "40 7" "200 3" "400 2"; do \
+	  set -- $$cfg; printf "LAT=%-4s BUSY=%-3s " $$1 $$2; \
+	  F3_DDR_LAT=$$1 F3_DDR_BUSY=$$2 ./obj_dir/pipetb ../dump 2930 pipe_ref_2930.txt /dev/null | tail -1; \
+	done
+
 pipe-all: obj_dir/pipetb
 	@for f in $$(ls ../dump/f3_*_frame.argb | sed 's/.*f3_0*\([0-9]*\)_frame.argb/\1/'); do \
 	  p1=$$(printf '../dump/f3_%05d_frame.argb' $$((f-1))); p2=$$(printf '../dump/f3_%05d_frame.argb' $$((f-2))); \

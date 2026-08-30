@@ -301,6 +301,7 @@ module rf_video_pipe
     wire   [8:0] smp_x;
     // sprite engine <-> framebuffer
     wire         spr_par, spr_fb_req, spr_fb_busy;
+    wire  [15:0] spr_fb_miss;
     wire   [7:0] spr_fb_line;
     wire   [8:0] spr_fb_addr;
     wire  [15:0] spr_fb_q;
@@ -333,6 +334,7 @@ module rf_video_pipe
         .wr_req(spr_fb_req), .wr_line(spr_fb_line), .wr_busy(spr_fb_busy),
         .lb_addr(spr_fb_addr), .lb_q(spr_fb_q),
         .rd_line(mix_y), .rd_x(smp_x), .rd_color(sp_color),
+        .miss(spr_fb_miss),
         .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_din(ddr_din),
         .ddr_be(ddr_be), .ddr_we(ddr_we), .ddr_rd(ddr_rd),
         .ddr_busy(ddr_busy), .ddr_dout(ddr_dout), .ddr_dout_ready(ddr_dout_ready)
@@ -455,10 +457,16 @@ module rf_video_pipe
                 if (held && t_spr_max    > h_spr_max) h_spr_max <= t_spr_max;
                 if (held) begin
                     h_drop <= (16'hFFFF - h_drop < spr_rec_drop) ? 16'hFFFF : h_drop + spr_rec_drop;
-                    h_late <= (16'hFFFF - h_late < n_spr_miss)   ? 16'hFFFF : h_late + n_spr_miss;
+                    h_late <= (16'hFFFF - h_late < spr_fb_miss)  ? 16'hFFFF : h_late + spr_fb_miss;
                 end
+                // The low half was "lines the mixer started before the draw
+                // had finished them". The draw has no per-line deadline now,
+                // so that count is structurally zero and would say nothing;
+                // what CAN still go wrong is the framebuffer not delivering a
+                // line in time, which is the same question about the new
+                // mechanism. Same row, same meaning.
                 dbg_spr <= held ? {(t_spr_max > h_spr_max) ? t_spr_max : h_spr_max,
-                                   (16'hFFFF - h_late < n_spr_miss) ? 16'hFFFF : h_late + n_spr_miss}
+                                   (16'hFFFF - h_late < spr_fb_miss) ? 16'hFFFF : h_late + spr_fb_miss}
                                 : {t_spr_max, 16'd0};
                 dbg_rec <= held ? {(spr_rec_peak > h_rec_max) ? spr_rec_peak : h_rec_max,
                                    (16'hFFFF - h_drop < spr_rec_drop) ? 16'hFFFF : h_drop + spr_rec_drop}

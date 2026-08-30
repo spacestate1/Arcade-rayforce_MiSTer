@@ -66,6 +66,7 @@ module rf_spr_fb
     input  logic  [7:0] rd_line,        // the line being composed
     input  logic  [8:0] rd_x,
     output logic [15:0] rd_color,
+    output logic [15:0] miss,           // lines composed without their sprites
 
     // ---- DDR3, through rf_ddr_arb ---------------------------------------
     output logic  [7:0] ddr_burstcnt,
@@ -109,37 +110,36 @@ module rf_spr_fb
     assign wr_busy = (wst != W_IDLE);
     assign lb_addr = 9'({w_word, 2'd0}) + 9'(w_pix);
 
-    // ================= READ: DDR3 -> the line the mixer wants ===========
-    // Two on-chip line buffers: the mixer samples one while the other is
-    // being filled with the next line. A line is 64.7 us and a DDR3 round
-    // trip is a few hundred ns, so the prefetch has three orders of
-    // magnitude of slack -- it only has to be STARTED early enough.
+    // ================= READ: DDR3 -> the lines the mixer will want =======
+    // A SLIDING WINDOW of NRB lines, filled in order and indexed by
+    // line % NRB, so the mixer reads line L from buffer L[1:0] and the
+    // prefetcher just walks forward.
+    //
+    // The first version held ONE line ahead and fetched reactively when the
+    // mixer asked for a line it did not have. On the board that produced
+    // sprites broken into dashes along the raster -- some scanlines had their
+    // sprite data and some did not -- because a fetch that takes longer than
+    // a line can never be caught up from one line of slack, and DDR3 here is
+    // shared with screen_rotate and the HPS, so its stalls are nothing like
+    // the model's. Depth is the fix, and it is cheap: 4 x 512 x 16 bits is
+    // 4 M10K out of the 18 this change handed back.
+    //
+    // The window is refilled from line 0 at frame_start, and vblank is 31
+    // lines long, so the first NRB lines are fetched with the mixer nowhere
+    // near them.
+    localparam int NRB = 4;
     typedef enum logic [1:0] { R_IDLE, R_REQ, R_WAIT } rst_t;
     rst_t rst;
     logic  [6:0] r_word;            // words requested
-    // Wide enough to hold WPL itself, and tested with >= rather than for the
-    // exact cycle the last word lands: with a fast memory the returns keep
-    // pace with the requests, so this counter can already be at WPL by the
-    // time the request phase ends. Testing for the edge instead hung the
-    // fetch until the next frame -- and it showed up as the picture getting
-    // WORSE when the modelled DDR3 got faster, which is the signature of a
-    // race rather than a wiring mistake.
-    logic  [7:0] r_got;             // words returned
-    logic  [7:0] r_line;            // the line being fetched
-    logic        r_fill;            // which local buffer is being filled
-    // Which screen line each buffer holds, and whether it holds anything.
-    // The mixer reads the buffer whose line matches rd_line -- NOT "the one
-    // not being filled". Selecting by fill state instead was a bug: at the
-    // moment the prefetch of line L+1 completes it would hand the mixer that
-    // buffer while the mixer is still composing L, and every line would show
-    // the next line's sprites.
-    logic  [7:0] buf_line [0:1];
-    logic  [1:0] buf_ok;
+    logic  [7:0] r_got;             // words returned; see the >= test below
+    logic  [8:0] nf;                // next line to fetch (256 = done)
+    logic  [1:0] r_fill;            // nf % NRB
+    logic  [7:0] buf_line [0:NRB-1];
+    logic [NRB-1:0] buf_ok;
 
-    // two 320 x 16 line buffers, one M10K
-    (* ramstyle = "M10K" *) logic [15:0] lbuf [0:1][0:511];
-    wire         rd_sel  = (buf_ok[0] && buf_line[0] == rd_line) ? 1'b0 : 1'b1;
-    wire         rd_hit  = buf_ok[rd_sel] && (buf_line[rd_sel] == rd_line);
+    (* ramstyle = "M10K" *) logic [15:0] lbuf [0:NRB-1][0:511];
+    wire  [1:0] rd_sel = rd_line[1:0];
+    wire        rd_hit = buf_ok[rd_sel] && (buf_line[rd_sel] == rd_line);
     logic [15:0] rd_q;
     logic        rd_hit_q;
     always_ff @(posedge clk) begin
@@ -148,13 +148,24 @@ module rf_spr_fb
     end
     assign rd_color = rd_hit_q ? rd_q : 16'd0;
 
-    // the four pixels of a returning word land at r_got*4 + k
+    // How many lines the mixer composed without their sprites being ready.
+    // This is the direct successor of SPRLINE's late-line count: the same
+    // question -- did the sprite data arrive in time -- for the new
+    // mechanism. It must stay at zero.
+    logic  [7:0] rd_line_q;
+    always_ff @(posedge clk) begin
+        rd_line_q <= rd_line;
+        if (reset || frame_start) miss <= 16'd0;
+        else if (rd_line != rd_line_q && !rd_hit && miss != 16'hFFFF)
+            miss <= miss + 16'd1;
+    end
+
     always_ff @(posedge clk) begin
         if (ddr_dout_ready && rst != R_IDLE) begin
-            lbuf[r_fill][{r_got, 2'd0} + 9'd0] <= ddr_dout[15:0];
-            lbuf[r_fill][{r_got, 2'd0} + 9'd1] <= ddr_dout[31:16];
-            lbuf[r_fill][{r_got, 2'd0} + 9'd2] <= ddr_dout[47:32];
-            lbuf[r_fill][{r_got, 2'd0} + 9'd3] <= ddr_dout[63:48];
+            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd0] <= ddr_dout[15:0];
+            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd1] <= ddr_dout[31:16];
+            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd2] <= ddr_dout[47:32];
+            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd3] <= ddr_dout[63:48];
         end
     end
 
@@ -168,17 +179,18 @@ module rf_spr_fb
     assign ddr_din      = w_acc;
     assign ddr_addr     = (wst == W_ISSUE)
                         ? (line_word(w_bank, w_line) + 29'(w_word))
-                        : (line_word(~par,   r_line) + 29'(r_word));
+                        : (line_word(~par, nf[7:0]) + 29'(r_word));
 
     always_ff @(posedge clk) begin
         if (reset) begin
             wst <= W_IDLE; rst <= R_IDLE;
-            r_fill <= 1'b0; buf_ok <= 2'b00;
-            buf_line[0] <= 8'd0; buf_line[1] <= 8'd0;
+            r_fill <= 2'd0; buf_ok <= '0; nf <= 9'd0; miss <= 16'd0;
+            for (int b = 0; b < NRB; b++) buf_line[b] <= 8'd0;
             w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 8'd0;
         end else begin
             if (frame_start) begin
-                buf_ok <= 2'b00;        // last frame's lines are stale
+                buf_ok <= '0;           // last frame's lines are stale
+                nf     <= 9'd0;         // refill the window from line 0
                 rst    <= R_IDLE;
             end
 
@@ -207,26 +219,23 @@ module rf_spr_fb
 
             // ---- read FSM: keep the buffer the mixer is NOT using filled
             // with the line after the one it is on
-            // Fetch whichever of {the line being shown, the next one} is not
-            // already in a buffer, the current line first -- after a
-            // frame_start neither is present and the mixer needs rd_line now.
+            // Walk forward: keep the window [rd_line, rd_line+NRB) filled.
             case (rst)
-                R_IDLE: if (!(buf_ok[0] && buf_line[0] == rd_line) &&
-                             !(buf_ok[1] && buf_line[1] == rd_line)) begin
-                    r_line <= rd_line;   r_fill <= rd_sel;
-                    r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
-                end else if (!(buf_ok[0] && buf_line[0] == rd_line + 8'd1) &&
-                             !(buf_ok[1] && buf_line[1] == rd_line + 8'd1)) begin
-                    r_line <= rd_line + 8'd1; r_fill <= ~rd_sel;
+                R_IDLE: if (!nf[8] && (nf < {1'b0, rd_line} + NRB)) begin
+                    r_fill <= nf[1:0];
                     r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
                 end
                 R_REQ: if (!ddr_busy && ddr_rd) begin
                     if (r_word == WPL - 1) rst <= R_WAIT;
                     else r_word <= r_word + 7'd1;
                 end
+                // >=, not the exact cycle the last word lands: with a fast
+                // memory the returns keep pace with the requests and this
+                // counter is already past it by the time R_WAIT is entered.
                 R_WAIT: if (r_got >= WPL) begin
-                    buf_line[r_fill] <= r_line;
+                    buf_line[r_fill] <= nf[7:0];
                     buf_ok[r_fill]   <= 1'b1;
+                    nf               <= nf + 9'd1;
                     rst              <= R_IDLE;
                 end
                 default: rst <= R_IDLE;
