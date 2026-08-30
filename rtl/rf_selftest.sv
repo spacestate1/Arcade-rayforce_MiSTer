@@ -107,6 +107,44 @@ module rf_selftest #(
 
     wire cpu_running = bist_done && !dl_active;
 
+    // ---- "has it ever" verdicts for the per-frame video rows -------------
+    // FETCH:PIX NZ, MAXFETCH:BUILD and TILE NZ:PF:PAL are latched once per
+    // frame by rf_video_pipe, and a frame with no playfield on it -- the
+    // notice screen, a scene cut, the black frame between attract loops --
+    // has zero tile fetches, zero non-zero tiles and no longest fetch,
+    // legitimately. Judged frame by frame those rows said FAIL on every such
+    // frame (3 of 95 page passes in a 45 s attract capture, 2026-08-29),
+    // which teaches the reader to ignore a red word that elsewhere on this
+    // page means something. What the rows exist to prove is that the
+    // pipeline CAN fetch tiles and make non-black pixels; once it has, that
+    // is proven, so each verdict latches PASS the first frame its condition
+    // holds and stays there. Until then it reads BUSY, the same idiom as the
+    // VIDEO RAM WRITES rows (a check that has started and not yet
+    // succeeded). The VALUE stays per-frame, so a blank frame still reads as
+    // blank on the page; only the verdict is sticky.
+    //
+    // MAXFETCH:BUILD carries a real per-frame limit as well (longest
+    // playfield build under the 3456-clock line budget), and that fault
+    // latches the other way: one frame over budget is FAIL from then on.
+    // Peak-held, like the sprite rows, because the page is read twice a
+    // second and a one-frame overrun would otherwise never be seen.
+    //
+    // All three clear while the CPU is not running (a download or the BIST
+    // in progress), so a re-download starts the proof over. No reset port:
+    // that is the reset.
+    logic fetch_seen, max_seen, max_over, nz_seen;
+    always_ff @(posedge clk) begin
+        if (!cpu_running) begin
+            fetch_seen <= 1'b0; max_seen <= 1'b0; max_over <= 1'b0; nz_seen <= 1'b0;
+        end else begin
+            if (vid_fetch[15:0] != 16'd0)     fetch_seen <= 1'b1;
+            if (vid_max[31:16]  != 16'd0)     max_seen   <= 1'b1;
+            if (vid_max[15:0]   >= 16'd3456)  max_over   <= 1'b1;
+            if (vid_nz[31:16] != 16'd0 && vid_nz[15:8] != 8'd0 && vid_nz[7:0] != 8'd0)
+                                              nz_seen    <= 1'b1;
+        end
+    end
+
     // ---- value / status per row -----------------------------------------
     // Written out twice (once per read port) rather than as a function:
     // quartus_map 17.0 is unreliable elaborating functions in this design,
@@ -180,21 +218,28 @@ module rf_selftest #(
         5'd22: begin VAL = vid_lines;                                        \
                  STA = (vid_lines == 32'h01000100) ? ST_PASS :               \
                        cpu_running ? ST_FAIL : ST_WAIT; end                  \
-        5'd23: begin VAL = vid_fetch;                                        \
+        5'd23: begin VAL = vid_fetch;   /* FETCH : PIX NZ  (sticky, above) */ \
                  STA = !cpu_running ? ST_WAIT :                              \
-                       (vid_fetch[15:0] != 16'd0) ? ST_PASS : ST_FAIL; end   \
-        5'd25: begin VAL = vid_nz;                                           \
+                       fetch_seen   ? ST_PASS : ST_BUSY; end                 \
+        5'd25: begin VAL = vid_nz;      /* TILE NZ:PF:PAL  (sticky, above) */ \
                  STA = !cpu_running ? ST_WAIT :                              \
-                       (vid_nz[31:16] != 16'd0 && vid_nz[15:8] != 8'd0 &&    \
-                        vid_nz[7:0] != 8'd0) ? ST_PASS : ST_FAIL; end        \
-        5'd24: begin VAL = vid_max;                                          \
+                       nz_seen      ? ST_PASS : ST_BUSY; end                 \
+        5'd24: begin VAL = vid_max;     /* MAXFETCH:BUILD  (sticky, above) */ \
                  STA = !cpu_running ? ST_WAIT :                              \
-                       (vid_max[15:0] < 16'd3456 && vid_max[31:16] != 16'd0) \
-                           ? ST_PASS : ST_FAIL; end                          \
+                       max_over     ? ST_FAIL :                              \
+                       max_seen     ? ST_PASS : ST_BUSY; end                 \
         5'd27: begin VAL = vid_spr;   /* SPRLINE : LATE */                   \
-                 STA = !cpu_running ? ST_WAIT :                              \
-                       (vid_spr[15:0] == 16'd0 && vid_spr[31:16] < 16'd3456) \
-                           ? ST_PASS : ST_FAIL; end                          \
+                 /* Late lines are the fault. The LONGEST line is not:      \
+                    the draw runs into a ring of 8 line buffers, so it       \
+                    banks 7 quiet lines' slack on top of the line's own      \
+                    3456 -- 27648 clocks -- and a single line well over      \
+                    budget is drawn in full with nothing missing. Judging    \
+                    it against 3456 called that FAIL: the board read         \
+                    39D90000 (14809 clocks, ZERO late) as a failure. Only    \
+                    a line past the whole ring's 27648 cannot be covered. */ \
+                 STA = !cpu_running          ? ST_WAIT :                     \
+                       (vid_spr[15:0] != 0)  ? ST_FAIL :                     \
+                       (vid_spr[31:16] < 16'd27648) ? ST_PASS : ST_FAIL; end \
         default: ;                                                           \
         endcase                                                              \
     end
