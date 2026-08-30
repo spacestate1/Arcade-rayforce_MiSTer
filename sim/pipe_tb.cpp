@@ -65,6 +65,23 @@ int main(int argc, char** argv) {
     const char* refp = argc > 3 ? argv[3] : "pipe_ref.txt";
     const char* outp = argc > 4 ? argv[4] : "pipe_out.ppm";
     int lat_lo = argc > 5 ? atoi(argv[5]) : 14;      // ram clocks; see run_pipe_lat
+    // The SPRITE channel's latency, separately. On the board the playfield
+    // planes are ch1/ch2 -- the controller's TOP two priorities -- while the
+    // sprite planes share ch4, which is fifth of six, so the sprite path
+    // waits several times longer than the playfields do. Raising `lat_lo`
+    // alone cannot model that: it slows the playfield builder too, and the
+    // frame then breaks everywhere instead of where the board breaks.
+    //     F3_SPS_LAT=90 ./obj_dir/pipetb ../dump 2930 ...
+    // is the operating point where the ONE-channel wiring loses the bottom of
+    // the frame (305 late lines, 67325/71680) and this two-channel one does
+    // not (0 late, 71680/71680). See "The sprite fetch path" in HANDOFF.md.
+    int lat_sps = getenv("F3_SPS_LAT") ? atoi(getenv("F3_SPS_LAT")) : lat_lo;
+    // Bus B's channel, separately. On the real controller ch7 sits BELOW ch4
+    // in the fixed-priority scan, so bus B is served only when bus A is not
+    // asking -- the two sprite channels are NOT symmetric the way this bench
+    // assumed. The draw consumes records in strict alternation (q_cs), so
+    // the SLOWER bus gates the pair. F3_SPS_LAT_B models that asymmetry.
+    int lat_spsb = getenv("F3_SPS_LAT_B") ? atoi(getenv("F3_SPS_LAT_B")) : lat_sps;
     int rate60 = argc > 6 ? atoi(argv[6]) : 0;       // 1 = the 257-line 60 Hz frame
 
     char pre[64]; snprintf(pre, sizeof pre, "/f3_%05d_", frame);
@@ -96,10 +113,10 @@ int main(int argc, char** argv) {
       free(buf); fclose(f); }
 
     Vpipe_top* t = new Vpipe_top;
-    // one shared sprite channel, as on the board: the two plane fetches are
-    // serialised by rf_spr_ch_share inside pipe_top, so the per-record cost
-    // here is the honest one
-    Chan lo, hi, sps;
+    // two shared sprite channels, as on the board: each fetch bus has its
+    // own, and rf_spr_ch_share serialises only the two planes behind it, so
+    // the per-record cost here is the honest one
+    Chan lo, hi, sps, spsb;
     uint32_t ra_l = 0, ra_p = 0, ra_c = 0, ra_t = 0, ra_h = 0, ra_v = 0, ra_spr = 0;
     long long cyc = 0;
 
@@ -127,10 +144,12 @@ int main(int argc, char** argv) {
             if ((cyc * 2 + r) % 11 == 0) continue;
             lo.tick(t->ch1_req, t->ch1_addr, lat_lo);
             hi.tick(t->ch2_req, t->ch2_addr, lat_lo - 5);
-            sps.tick(t->sps_req, t->sps_addr, lat_lo);
+            sps.tick(t->sps_req, t->sps_addr, lat_sps);
+            spsb.tick(t->sps_b_req, t->sps_b_addr, lat_spsb);
             t->ch1_dout = lo.dout; t->ch1_ready = lo.ready;
             t->ch2_dout = hi.dout; t->ch2_ready = hi.ready;
             t->sps_dout = sps.dout; t->sps_ready = sps.ready;
+            t->sps_b_dout = spsb.dout; t->sps_b_ready = spsb.ready;
             t->clk_ram = 1; t->eval(); t->clk_ram = 0; t->eval();
         }
         t->div = div; t->hcnt = hcnt; t->vcnt = vcnt;
@@ -174,7 +193,14 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 16; i++) step();
     t->reset = 0;
 
-    while (frames_done < 3) step();          // frame 1 primes, 2 and 3 are real
+    // Frames to run before the comparison. Three is enough for the picture
+    // (frame 1 primes the sprite ring), but the pipe's own SPRLINE : LATE
+    // counter is peak-HELD and only starts accumulating on the 16th frame
+    // -- so reading it in this bench needs F3_FRAMES=20 or more. With the
+    // VRAM static, every extra frame is the same frame again, which is
+    // exactly what a steady-state timing reading wants.
+    const int NFRAMES = getenv("F3_FRAMES") ? atoi(getenv("F3_FRAMES")) : 3;
+    while (frames_done < NFRAMES) step();     // frame 1 primes, the rest are real
     // through frame_end (raster 0 of the next frame) so the diagnostics
     // printed are frame 3's -- the frame compared below -- not frame 2's
     for (int i = 0; i < 4; i++) step();

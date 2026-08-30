@@ -1,9 +1,15 @@
-// Bench wrapper: rf_video_pipe with the two sprite gfx planes merged onto
-// ONE shared channel through rf_spr_ch_share -- the wiring Rayforce.sv uses
-// on the real controller (only ch4 is free), so the arbiter is covered by
-// the pipe regression instead of meeting hardware untested. The shared
-// channel also serialises the two plane fetches, which is the real timing
-// the draw FSM's prefetch has to hide.
+// Bench wrapper: rf_video_pipe with the sprite gfx planes behind
+// rf_spr_ch_share, exactly as Rayforce.sv wires them, so the arbiter is
+// covered by the pipe regression instead of meeting hardware untested.
+//
+// TWO shared channels, one per fetch bus: bus A's two planes on sps_a and
+// bus B's two planes on sps_b. A sharer serialises the planes behind it --
+// it holds one burst outstanding -- so with all four planes on one channel
+// the four bursts a record-pair needs are strictly one after another, and
+// the line's draw time is (bursts x round trip) with nothing overlapped.
+// Splitting the buses across two channels lets the two records overlap and
+// halves that, which is what the board needs (see "The sprite fetch path" in
+// HANDOFF.md). Ray Force's ch4 and ch7 on the real controller.
 module pipe_top (
     input  logic        clk,
     input  logic        reset,
@@ -45,11 +51,15 @@ module pipe_top (
     output logic [14:0] spr_addr,
     input  logic [15:0] spr_q,
 
-    // the one shared sprite gfx channel (ch4 on the real board)
+    // the two shared sprite gfx channels (ch4 and ch7 on the real board)
     output logic [26:1] sps_addr,
     input  logic [63:0] sps_dout,
     output logic        sps_req,
     input  logic        sps_ready,
+    output logic [26:1] sps_b_addr,
+    input  logic [63:0] sps_b_dout,
+    output logic        sps_b_req,
+    input  logic        sps_b_ready,
 
     output logic [23:0] rgb,
 
@@ -90,14 +100,27 @@ module pipe_top (
         .dbg_max(dbg_max), .dbg_nz(dbg_nz), .dbg_spr(dbg_spr), .dbg_rec(dbg_rec)
     );
 
-    rf_spr_ch_share share (
+    // Bus A's planes on channel 1, bus B's on channel 2. The sharer's b_*
+    // ports are tied off: two ports each is all that is wanted, and an
+    // unused port with its request low never wins the arbiter.
+    rf_spr_ch_share share_a (
         .clk_ram(clk_ram),
         .a_lo_addr(a_lo_addr), .a_lo_dout(a_lo_dout), .a_lo_req(a_lo_req), .a_lo_ready(a_lo_ready),
         .a_hi_addr(a_hi_addr), .a_hi_dout(a_hi_dout), .a_hi_req(a_hi_req), .a_hi_ready(a_hi_ready),
-        .b_lo_addr(b_lo_addr), .b_lo_dout(b_lo_dout), .b_lo_req(b_lo_req), .b_lo_ready(b_lo_ready),
-        .b_hi_addr(b_hi_addr), .b_hi_dout(b_hi_dout), .b_hi_req(b_hi_req), .b_hi_ready(b_hi_ready),
+        .b_lo_addr(26'd0), .b_lo_dout(), .b_lo_req(1'b0), .b_lo_ready(),
+        .b_hi_addr(26'd0), .b_hi_dout(), .b_hi_req(1'b0), .b_hi_ready(),
         .ch_addr(sps_addr), .ch_dout(sps_dout),
         .ch_req(sps_req),   .ch_ready(sps_ready)
+    );
+
+    rf_spr_ch_share share_b (
+        .clk_ram(clk_ram),
+        .a_lo_addr(b_lo_addr), .a_lo_dout(b_lo_dout), .a_lo_req(b_lo_req), .a_lo_ready(b_lo_ready),
+        .a_hi_addr(b_hi_addr), .a_hi_dout(b_hi_dout), .a_hi_req(b_hi_req), .a_hi_ready(b_hi_ready),
+        .b_lo_addr(26'd0), .b_lo_dout(), .b_lo_req(1'b0), .b_lo_ready(),
+        .b_hi_addr(26'd0), .b_hi_dout(), .b_hi_req(1'b0), .b_hi_ready(),
+        .ch_addr(sps_b_addr), .ch_dout(sps_b_dout),
+        .ch_req(sps_b_req),   .ch_ready(sps_b_ready)
     );
 
 endmodule

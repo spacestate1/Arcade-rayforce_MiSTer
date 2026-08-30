@@ -436,16 +436,61 @@ wire        ch5_req, ch5_ready;
 wire [26:1] ch6_addr;
 wire [63:0] ch6_dout;
 wire        ch6_req, ch6_ready;
+// ch7: the sprite engine's SECOND fetch bus (see below)
+wire [26:1] ch7_addr;
+wire [63:0] ch7_dout;
+wire        ch7_req, ch7_ready;
 
-rf_spr_ch_share spr_ch_share
+// ---- sprite graphics: ONE CHANNEL PER FETCH BUS -------------------------
+// The sprite engine runs two fetch buses (A and B) taking alternate records,
+// and each record needs two planes, so four plane requests are outstanding
+// at once. They used to share ch4 alone, and rf_spr_ch_share holds exactly
+// one burst outstanding -- so those four bursts were served strictly one
+// after another and a line's draw time came to (bursts x round trip) with
+// nothing overlapped at all. Measured in sim/pipe_tb (F3_SPS_LAT, frame
+// 2930): the draw time is linear in the fetch latency with a slope of
+// exactly one round trip per burst, which is the signature of zero overlap.
+//
+// On the board that made sprites disappear from the bottom of the screen in
+// attract, roughly 40-60 s in: the draw fell behind partway down the frame
+// and the ring's run-ahead never recovered, so every line from there to the
+// end of the frame drew with whatever had arrived. It is Known problem #1 in
+// the README, and it is a latency problem, not a bandwidth one -- the record
+// store never dropped a row (SPR REC : DROP stays 0).
+//
+// A channel per bus lets the two records overlap, which halves it. Measured
+// on frame 2930, the frame the board was caught getting wrong: the picture
+// stays identical to MAME up to a sprite-fetch round trip of 135 ram clocks
+// instead of 70, and at a modelled 90-clock round trip the longest line falls
+// from 6607 clocks to 3678 with the late-line count going 305 -> 0 (the
+// per-line budget is 3456, but the ring of 8 banks seven spare lines on top
+// of it, so a line over budget is not by itself a dropped sprite). The draw
+// time is linear in the round trip: 62.1 clocks per clock on one channel,
+// 32.3 on two -- the slope halves, which is the overlap doing its job.
+//
+// ch7 sits immediately after ch4 in the controller's priority chain, so the
+// sprite path's standing against the CPU and the sound board is unchanged --
+// the only difference is how many of its bursts can be in flight.
+rf_spr_ch_share spr_ch_share_a
 (
     .clk_ram(clk_ram),
     .a_lo_addr(spr_a_lo_addr), .a_lo_dout(spr_a_lo_dout), .a_lo_req(spr_a_lo_req), .a_lo_ready(spr_a_lo_ready),
     .a_hi_addr(spr_a_hi_addr), .a_hi_dout(spr_a_hi_dout), .a_hi_req(spr_a_hi_req), .a_hi_ready(spr_a_hi_ready),
-    .b_lo_addr(spr_b_lo_addr), .b_lo_dout(spr_b_lo_dout), .b_lo_req(spr_b_lo_req), .b_lo_ready(spr_b_lo_ready),
-    .b_hi_addr(spr_b_hi_addr), .b_hi_dout(spr_b_hi_dout), .b_hi_req(spr_b_hi_req), .b_hi_ready(spr_b_hi_ready),
+    .b_lo_addr(26'd0), .b_lo_dout(), .b_lo_req(1'b0), .b_lo_ready(),
+    .b_hi_addr(26'd0), .b_hi_dout(), .b_hi_req(1'b0), .b_hi_ready(),
     .ch_addr(ch4_addr), .ch_dout(ch4_dout),
     .ch_req(ch4_req),   .ch_ready(ch4_ready)
+);
+
+rf_spr_ch_share spr_ch_share_b
+(
+    .clk_ram(clk_ram),
+    .a_lo_addr(spr_b_lo_addr), .a_lo_dout(spr_b_lo_dout), .a_lo_req(spr_b_lo_req), .a_lo_ready(spr_b_lo_ready),
+    .a_hi_addr(spr_b_hi_addr), .a_hi_dout(spr_b_hi_dout), .a_hi_req(spr_b_hi_req), .a_hi_ready(spr_b_hi_ready),
+    .b_lo_addr(26'd0), .b_lo_dout(), .b_lo_req(1'b0), .b_lo_ready(),
+    .b_hi_addr(26'd0), .b_hi_dout(), .b_hi_req(1'b0), .b_hi_ready(),
+    .ch_addr(ch7_addr), .ch_dout(ch7_dout),
+    .ch_req(ch7_req),   .ch_ready(ch7_ready)
 );
 
 wire [26:1] ch3_addr_pb;                // prog_bus side of the loader mux
@@ -516,7 +561,8 @@ sdram sdram
     .ch3_ready(ch3_ready),
     .ch4_addr(ch4_addr), .ch4_dout(ch4_dout), .ch4_req(ch4_req), .ch4_ready(ch4_ready),
     .ch5_addr(ch5_addr), .ch5_dout(ch5_dout), .ch5_req(ch5_req), .ch5_ready(ch5_ready),
-    .ch6_addr(ch6_addr), .ch6_dout(ch6_dout), .ch6_req(ch6_req), .ch6_ready(ch6_ready)
+    .ch6_addr(ch6_addr), .ch6_dout(ch6_dout), .ch6_req(ch6_req), .ch6_ready(ch6_ready),
+    .ch7_addr(ch7_addr), .ch7_dout(ch7_dout), .ch7_req(ch7_req), .ch7_ready(ch7_ready)
 );
 
 ////////////////////  PROGRAM BUS + READBACK BIST  ///////////////

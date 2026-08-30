@@ -11,6 +11,11 @@
 #   make mix-all  the same over every frame that has its two predecessors dumped
 #   make pipe     rf_video_pipe under real raster timing vs the playfields-only model
 #   make pipe-60  the same with the 257-line 60 Hz frame (Refresh Rate OSD option)
+#   make spr-lat  frame 2930 -- the frame the BOARD was caught getting wrong --
+#                 with only the sprite channel slowed (F3_SPS_LAT). This is
+#                 the gate for the sprite fetch path; see the target below.
+#   make spr-rec  the sprite record count (rec_peak) against the model's run
+#                 count, on three frames incl. the shrink-heavy one (4200)
 #   make pipe-lat frame 3000 (114 sprite-rows on a line) at a hardware-like
 #                 channel turnaround. The bench's latency IS the per-burst
 #                 occupancy of the shared sprite channel (rf_spr_ch_share
@@ -28,7 +33,7 @@ VERILATOR ?= verilator
 VFLAGS = -DVERILATOR --cc --exe --build -Wno-fatal -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC
 RTL = ../rtl
 
-.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw \
+.PHONY: gfx spr-gfx line line-all eeprom pf pf-mosaic pf-all mix mix-all pipe pipe-60 pipe-lat spr-lat spr-rec spr spr-all spr-line spr-line-all spr-ghost es5505 es5505-rw \
         ear-mix ear-mix-all ear-pipe-all ear-spr-line-all clean
 
 gfx: obj_dir/gfxtb
@@ -239,6 +244,49 @@ pipe-lat: obj_dir/pipetb
 	python3 gen_pipe_ref.py ../dump 3000 > pipe_ref_3000.txt
 	./obj_dir/pipetb ../dump 3000 pipe_ref_3000.txt pipe_out_3000_lat.ppm 24
 	-./obj_dir/pipetb ../dump 3000 pipe_ref_3000.txt pipe_out_3000_lat34.ppm 34 | tail -2
+
+# ---- the SPRITE FETCH gate ----------------------------------------------
+# Frame 2930 is the frame the board was caught rendering WRONG (2026-08-29).
+# The cabinet screenshot at that instant (screenshots/glitch_board/t062.png)
+# and MAME's own frame 2930 differ in 1124 pixels, EVERY ONE of them on rows
+# 210-223 -- the last 14 lines -- with rows 0-209 pixel-identical. Nothing was
+# wrong with the rendering: the same frame is 71680/71680 identical here. The
+# sprite draw ran out of time partway down and the ring's run-ahead never
+# recovered before the frame ended.
+#
+# F3_SPS_LAT is the SPRITE channel's round trip in ram clocks, on its own.
+# The `lat` positional argument cannot stand in for it: that slows the
+# playfield channels too (ch1/ch2, the controller's top two priorities) and
+# the frame then breaks everywhere instead of at the bottom, where the board
+# breaks it. Measured (F3_FRAMES=20, see pipe_tb.cpp): with one channel the
+# frame is exact to lat 70 and breaks at 75; with the two channels ch4/ch7 it
+# is exact to 135 and breaks at 140. 130 is the gate -- inside what is
+# verified, and not claiming margin that is not there.
+SPS_LAT ?= 130
+spr-lat: obj_dir/pipetb
+	python3 gen_pipe_ref.py ../dump 2930 > pipe_ref_2930.txt
+	F3_SPS_LAT=$(SPS_LAT) ./obj_dir/pipetb ../dump 2930 pipe_ref_2930.txt pipe_out_2930_lat.ppm
+
+# ---- the record STORE gate ---------------------------------------------
+# Records are run-length (2026-08-29): one per run of consecutive source rows
+# of a sprite landing on one screen line, not one per row. The pixel benches
+# prove the draw still lays every row down; this proves the prepass builds
+# exactly as many records as the model says a frame needs -- rec_peak, the
+# high half of dbg_rec, against tools/f3_rec_count.py --lag (the bench draws
+# frame f from frame f-2's sprite RAM). 4200 is the shrink-heavy frame where
+# the run-length form matters most (2672 rows -> 854 records); a prepass
+# that split or merged runs wrongly would show here before it showed on the
+# page.
+SPR_REC_FRAMES ?= 1800 2930 4200
+spr-rec: obj_dir/pipetb
+	@rc=0; for f in $(SPR_REC_FRAMES); do \
+	  [ -f pipe_ref_$$f.txt ] || python3 gen_pipe_ref.py ../dump $$f > pipe_ref_$$f.txt; \
+	  got=$$(./obj_dir/pipetb ../dump $$f pipe_ref_$$f.txt /dev/null | grep -o 'dbg_rec [0-9a-f]*' | awk '{print $$2}'); \
+	  got=$$((16#$${got:0:4})); \
+	  want=$$(python3 ../tools/f3_rec_count.py ../dump $$f --lag | tail -1 | awk '{print $$4}'); \
+	  if [ "$$got" = "$$want" ]; then echo "frame $$f: $$got records, matches the model"; \
+	  else echo "frame $$f: RTL built $$got records, model says $$want -- MISMATCH"; rc=1; fi; \
+	done; exit $$rc
 
 pipe_ref.txt: gen_pipe_ref.py ../tools/f3_render.py
 	python3 gen_pipe_ref.py ../dump 1800 > $@
