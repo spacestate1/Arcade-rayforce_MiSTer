@@ -209,6 +209,11 @@ localparam CONF_STR = {
     "O[11],Refresh Rate,58.9Hz Native,60Hz;",
     "-;",
     "O[13:12],Stereo Mix,None,25%,50%,100% (Mono);",
+    // The board's own output is very quiet -- see "Audio Boost" below. The
+    // first entry is the power-up default (MiSTer's status word starts at
+    // 0), which is why 8x leads and the exact level is second rather than
+    // the list running 1x..16x.
+    "O[17:16],Audio Boost,8x,1x (exact),4x,16x;",
     "-;",
     "O[15],Pause When OSD Open,Off,On;",
     "O[2],Service Mode,Off,On;",
@@ -1009,13 +1014,50 @@ logic mix_valid;
 always_ff @(posedge clk_sys) mix_valid <= es_out_valid;
 
 // the MB87078 volume control: the game's fades and level, then 16-bit out
+wire signed [15:0] snd_l, snd_r;        // MAME's own level, pre-boost
 rf_mb87078 mb87078
 (
     .clk(clk_sys), .reset(cpu_reset),
     .we(vl_we), .offset(vl_offset), .data(vl_data),
     .in_valid(mix_valid), .in_l(mix_l), .in_r(mix_r),
-    .out_l(AUDIO_L), .out_r(AUDIO_R)
+    .out_l(snd_l), .out_r(snd_r)
 );
+
+// ---- AUDIO BOOST -------------------------------------------------------
+// The chain above reproduces MAME's gain structure exactly, and MAME's
+// gain structure for this board is very quiet. rf_mb87078's 0 dB
+// coefficient is 576 against a >>> 15, i.e. 576/32768 -- which is precisely
+// taito_en's x3.125 at 0 dB, times MAME's 0.18 route gain, times the
+// ES5506 pump's 0.5, times the 20-bit -> 16-bit 1/16. Ray Force then runs
+// the chip at -7.5 dB (data 0x30), not 0 dB, so the total is about 1/135.
+//
+// Measured on the board's own Audio Ring capture (dump/en5/audio_ring_b13.log,
+// 17714 samples): peak 693 of 32768 = -33.5 dBFS, rms 232 = -43.0 dBFS. That
+// is 25-30 dB below where a MiSTer arcade core normally sits, and it is why
+// both games sound almost silent at a normal amplifier setting.
+//
+// So this is not a defect to correct but a level to choose. The boost is a
+// saturating left shift on the finished 16-bit sample, defaulting to 8x
+// (+18 dB, peak -15.4 dBFS on that capture); 16x is there for quiet
+// amplifiers and 1x reproduces MAME's own level for anyone comparing.
+// Saturation means a louder passage than that capture clips gracefully
+// rather than wrapping.
+wire [1:0] aud_boost = status[17:16];
+wire [2:0] aud_sh = (aud_boost == 2'd0) ? 3'd3 :    // 8x  -- the default
+                    (aud_boost == 2'd1) ? 3'd0 :    // 1x  -- MAME's level
+                    (aud_boost == 2'd2) ? 3'd2 :    // 4x
+                                          3'd4;     // 16x
+
+// Written out per side rather than as a function: quartus_map 17.0 is
+// unreliable elaborating functions in this design (rf_selftest carries the
+// same note, and duplicates a mux for the same reason). Same saturating
+// form rf_mb87078 uses on its own output.
+wire signed [23:0] aud_wl = 24'($signed(snd_l)) <<< aud_sh;
+wire signed [23:0] aud_wr = 24'($signed(snd_r)) <<< aud_sh;
+assign AUDIO_L = (aud_wl >  24'sd32767) ?  16'sd32767 :
+                 (aud_wl < -24'sd32768) ? -16'sd32768 : aud_wl[15:0];
+assign AUDIO_R = (aud_wr >  24'sd32767) ?  16'sd32767 :
+                 (aud_wr < -24'sd32768) ? -16'sd32768 : aud_wr[15:0];
 
 
 rf_uart_dump uart_dump
@@ -1185,7 +1227,11 @@ assign UART_TXD = (uart_mode == 2'd0) ? uart_log_txd : uart_ring_txd;
 // what the board actually plays, for tools/rf_audio_ring.py to turn into a
 // wav and correlate with the model's output for the same moment. Every
 // other way of asking "is the sound right" needs an ear in the room.
-wire  signed [15:0] aud_l = AUDIO_L;
+// Tapped PRE-BOOST, deliberately: this ring exists to prove the board plays
+// what the model computes, and tools/rf_audio_match.py reports the amplitude
+// ratio against MAME's own mix. Capturing the boosted signal would make that
+// ratio the boost setting instead of a verification result.
+wire  signed [15:0] aud_l = snd_l;
 always_ff @(posedge clk_sys) begin
     aud_ring_we <= 1'b0;
     if (cpu_reset | snd_reset) begin

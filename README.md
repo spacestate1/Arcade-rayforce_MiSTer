@@ -289,6 +289,23 @@ therefore applies when rotation is on, and does nothing with `Rotate = None`.
 **Stereo Mix** (None / 25 % / 50 % / 100 %) are the usual MiSTer options. The
 ES5505 pans its voices, so Stereo Mix is a real choice on headphones.
 
+**Audio Boost** — **the arcade board's own output is very quiet**, and this
+core reproduces its gain structure exactly, so without a boost both games sit
+about 25–30 dB below where a MiSTer core normally does. Measured from the
+core's own Audio Ring capture: peak **−33.5 dBFS**, rms −43 dBFS.
+
+That is not a defect. `rf_mb87078`'s 0 dB coefficient is 576 against a `>>> 15`
+— precisely taito_en's ×3.125 at 0 dB, times MAME's 0.18 route gain, times the
+ES5506 pump's 0.5, times the 20-bit → 16-bit ÷16 — and Ray Force then runs the
+chip at −7.5 dB rather than 0 dB, for about 1/135 in total.
+
+So the level is a choice, and the OSD makes it one: **8x by default** (+18 dB),
+with 16x for quiet amplifiers and **1x for MAME's own level** if you are
+comparing the two. It is a saturating shift on the finished sample, so a loud
+passage clips rather than wraps. The Audio Ring is tapped *before* the boost,
+so `tools/rf_audio_match.py` still reports a real amplitude ratio against
+MAME rather than the boost setting.
+
 **Refresh Rate** — native is 262 lines at **58.94 Hz**, which nearly every
 15 kHz display holds. The **60Hz** option trims the frame to 257 lines; the
 game paces itself off the vblank interrupt, so it then runs ~1.8 % fast. Leave
