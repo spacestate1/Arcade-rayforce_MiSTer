@@ -184,7 +184,7 @@ module rf_spr_fb
     always_ff @(posedge clk) begin
         if (reset) begin
             wst <= W_IDLE; rst <= R_IDLE;
-            r_fill <= 2'd0; buf_ok <= '0; nf <= 9'd0; miss <= 16'd0;
+            r_fill <= 2'd0; buf_ok <= '0; nf <= 9'd0;
             for (int b = 0; b < NRB; b++) buf_line[b] <= 8'd0;
             w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 8'd0;
         end else begin
