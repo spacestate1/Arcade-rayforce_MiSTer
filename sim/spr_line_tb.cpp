@@ -111,7 +111,12 @@ int main(int argc, char** argv) {
     // Force), 3 f3 (Elevator Action Returns). The cull bounds follow it.
     t->vis_mode = getenv("F3_VISMODE") ? atoi(getenv("F3_VISMODE")) : 0;
     t->reset = 1; t->frame_start = 0;
-    t->rd_x = 0; t->rd_line = 0;
+    t->fb_addr = 0; t->rd_line = 0;
+    // Parked from the start. The draw is no longer chased by the mixer, so
+    // left free it publishes line 0 within a few hundred cycles and is two
+    // hundred lines further on before check() starts looking -- the bench has
+    // to OWN the handover, not observe it.
+    t->fb_busy = 1;
     for (int i = 0; i < 6; i++) step();
     t->reset = 0;
 
@@ -140,19 +145,34 @@ int main(int argc, char** argv) {
     };
     auto check = [&](int fno) {
     for (int sy = 0; sy < 256; sy++) {
-        // the draw runs ahead on its own, held back by rd_line (the mixer's
-        // line): move the mixer to this line and wait until it is drawn
-        t->rd_line = sy;
-        long gl = 0; while (t->lines_done <= sy && gl++ < 2000000) step();
-        for (int i = 0; i < 4; i++) step();
+        // The draw is no longer chased by the mixer -- it fills one of two
+        // banks and PUBLISHES each finished line on fb_req, which is what
+        // rf_spr_fb streams to DDR3. So catch the line as it is handed over
+        // rather than reading a ring that no longer holds it: raising fb_busy
+        // the moment fb_req fires parks the draw at the NEXT handover, which
+        // is exactly what stops dbank flipping and keeps this line's bank
+        // readable on fb_addr/fb_q. That makes this bench a test of the
+        // handover protocol as well as of the pixels.
+        // release the handover for exactly one line, then park again
+        t->fb_busy = 0;
+        long gl = 0;
+        // step FIRST: fb_req is a one-cycle pulse and the previous line's may
+        // still be asserted on the cycle this loop is entered, which would
+        // exit immediately and read the previous line's number
+        do { step(); } while (!t->fb_req && gl++ < 4000000);
+        t->fb_busy = 1;
+        if (t->fb_line != sy) { printf("  line out of order: got %d want %d\n",
+                                       (int)t->fb_line, sy); bad++; }
+        for (int i = 0; i < 2; i++) step();
 
-        // read the line buffer for this line
+        // read the line buffer for the line just published
         std::vector<int> got(320, 0);
         for (int x = 0; x < 320; x++) {
-            t->rd_x = x; step();               // present address
+            t->fb_addr = x; step();            // present address
             step();                            // data valid next cycle
-            got[x] = t->rd_color & 0x1FFF;
+            got[x] = t->fb_q & 0x1FFF;
         }
+        t->fb_busy = 0;
         if ((int)fb[sy].size() == 320) {
             for (int x = 0; x < 320; x++) if (got[x] != fb[sy][x]) {
                 bad++;
@@ -160,9 +180,9 @@ int main(int argc, char** argv) {
                     printf("  sy=%d x=%d rtl=%04x ref=%04x\n", sy, x + 46, got[x], fb[sy][x]);
             }
         }
-        if ((t->rd_used & 0xF) != (used[sy] & 0xF)) {
+        if ((t->fb_used & 0xF) != (used[sy] & 0xF)) {
             ubad++;
-            if (ubad <= 6) printf("  sy=%d used rtl=%x ref=%x\n", sy, t->rd_used & 0xF, used[sy] & 0xF);
+            if (ubad <= 6) printf("  sy=%d used rtl=%x ref=%x\n", sy, t->fb_used & 0xF, used[sy] & 0xF);
         }
     }
     printf("frame %d: %d pixel diffs, %d used-flag diffs (%lld cyc)\n", fno, bad, ubad, cyc);
@@ -182,10 +202,25 @@ int main(int argc, char** argv) {
         for (int c = 0; c < 2; c++) {
             t->frame_start = 1; step(); t->frame_start = 0;
             long g = 0; while (t->prepass_busy && g++ < 20000000) step();
-            long gd = 0; while (t->lines_done < 256 && gd++ < 20000000) { t->rd_line = 255; step(); }
+            // Let the draw free-run through the frame: check() leaves the
+            // handover PARKED (fb_busy high) after its last line, so leaving
+            // it parked here stalls the draw at line 0 and lines_done never
+            // moves -- the catch-up below would spin out its guard and the
+            // next check() would then see no handover at all.
+            t->fb_busy = 0;
+            long gd = 0; while (t->lines_done < 256 && gd++ < 20000000) step();
+            t->fb_busy = 1;
             t->rd_line = 0;
             for (int i = 0; i < 4; i++) step();
         }
+        // Those runs drew the whole frame -- which is the point, the ghost
+        // test needs the new frame laid over the old one -- but they also
+        // leave nxt at 256 with nothing left to publish. check() walks
+        // handovers, so start ONE more frame with the handover already parked:
+        // the draw then fills line 0, stops at D_DONE, and waits for check().
+        t->frame_start = 1; step(); t->frame_start = 0;
+        { long g = 0; while (t->prepass_busy && g++ < 20000000) step(); }
+        for (int i = 0; i < 4; i++) step();
         int before = bad;
         check(frame2);
         if (bad > before)

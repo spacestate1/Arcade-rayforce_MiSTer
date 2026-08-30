@@ -125,6 +125,17 @@ module rf_video_pipe
     // line}. SPRLINE gives a line's total; these two say which half of it
     // is fetch wait and which is sheer density -- the question the dumps
     // cannot answer because every one of them is attract.
+    // ---- the sprite framebuffer's DDR3 port, out to rf_ddr_arb ----------
+    output logic  [7:0] ddr_burstcnt,
+    output logic [28:0] ddr_addr,
+    output logic [63:0] ddr_din,
+    output logic  [7:0] ddr_be,
+    output logic        ddr_we,
+    output logic        ddr_rd,
+    input  logic        ddr_busy,
+    input  logic [63:0] ddr_dout,
+    input  logic        ddr_dout_ready,
+
     output logic [31:0] dbg_sfetch,
     output logic [31:0] dbg_spr,       // {longest sprite line draw in clocks,
                                        //  lines the mixer started before the
@@ -285,9 +296,14 @@ module rf_video_pipe
     // frame). Eight frames is well past the first real prepass.
     logic  [3:0] warm;
     wire         held = (warm == 4'hF);
-    logic [15:0] sp_color;
+    wire  [15:0] sp_color;              // from the framebuffer, a frame later
     logic  [3:0] sp_used;
     wire   [8:0] smp_x;
+    // sprite engine <-> framebuffer
+    wire         spr_par, spr_fb_req, spr_fb_busy;
+    wire   [7:0] spr_fb_line;
+    wire   [8:0] spr_fb_addr;
+    wire  [15:0] spr_fb_q;
 
     rf_video_spr sprites (
         .clk(clk), .reset(reset), .clk_ram(clk_ram), .vis_mode(vis_mode),
@@ -301,8 +317,25 @@ module rf_video_pipe
         .ch_a_hi_addr(spr_a_hi_addr), .ch_a_hi_dout(spr_a_hi_dout), .ch_a_hi_req(spr_a_hi_req), .ch_a_hi_ready(spr_a_hi_ready),
         .ch_b_lo_addr(spr_b_lo_addr), .ch_b_lo_dout(spr_b_lo_dout), .ch_b_lo_req(spr_b_lo_req), .ch_b_lo_ready(spr_b_lo_ready),
         .ch_b_hi_addr(spr_b_hi_addr), .ch_b_hi_dout(spr_b_hi_dout), .ch_b_hi_req(spr_b_hi_req), .ch_b_hi_ready(spr_b_hi_ready),
-        .rd_x(smp_x), .rd_line(mix_y),
-        .rd_color(sp_color), .rd_used(sp_used)
+        .rd_line(mix_y), .rd_used(sp_used),
+        .o_par(spr_par),
+        .fb_req(spr_fb_req), .fb_line(spr_fb_line), .fb_busy(spr_fb_busy), .fb_used(),
+        .fb_addr(spr_fb_addr), .fb_q(spr_fb_q)
+    );
+
+    // The sprite framebuffer: the draw's finished lines go out to DDR3 and
+    // the mixer reads LAST frame's back. This is what takes the per-line
+    // deadline off the draw entirely -- see rf_spr_fb.sv for the measurements
+    // that forced it.
+    rf_spr_fb spr_fb (
+        .clk(clk), .reset(reset),
+        .frame_start(frame_start), .par(spr_par),
+        .wr_req(spr_fb_req), .wr_line(spr_fb_line), .wr_busy(spr_fb_busy),
+        .lb_addr(spr_fb_addr), .lb_q(spr_fb_q),
+        .rd_line(mix_y), .rd_x(smp_x), .rd_color(sp_color),
+        .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_din(ddr_din),
+        .ddr_be(ddr_be), .ddr_we(ddr_we), .ddr_rd(ddr_rd),
+        .ddr_busy(ddr_busy), .ddr_dout(ddr_dout), .ddr_dout_ready(ddr_dout_ready)
     );
 
     // ---- mixer -----------------------------------------------------------

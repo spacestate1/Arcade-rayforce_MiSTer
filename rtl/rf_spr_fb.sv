@@ -46,8 +46,13 @@ module rf_spr_fb
     input  logic        reset,
 
     // ---- the frame boundary ---------------------------------------------
-    // par is the parity of the frame being DRAWN; the mixer reads ~par.
+    // par is the parity of the frame being DRAWN; the mixer reads ~par. It
+    // comes FROM the sprite engine rather than being toggled here as well:
+    // two counters advancing on the same edge is a bug waiting for the one
+    // reset that misses one of them, and if they ever disagreed the mixer
+    // would read the bank being written.
     input  logic        frame_start,
+    input  logic        par,
 
     // ---- write side: a finished line from the draw ----------------------
     input  logic        wr_req,         // pulse: line wr_line is ready
@@ -79,8 +84,6 @@ module rf_spr_fb
     localparam logic [28:0] FB_BASE  = 29'h0600_0000;
     localparam int          WPL      = 80;          // 64-bit words per line
     localparam int          WPB      = 256 * WPL;   // words per frame bank
-
-    logic par;                                      // frame being drawn
 
     // word index of (bank, line): bank*WPB + line*80, and 80 = 64 + 16 so
     // the multiply is two shifts and an add
@@ -114,7 +117,14 @@ module rf_spr_fb
     typedef enum logic [1:0] { R_IDLE, R_REQ, R_WAIT } rst_t;
     rst_t rst;
     logic  [6:0] r_word;            // words requested
-    logic  [6:0] r_got;             // words returned
+    // Wide enough to hold WPL itself, and tested with >= rather than for the
+    // exact cycle the last word lands: with a fast memory the returns keep
+    // pace with the requests, so this counter can already be at WPL by the
+    // time the request phase ends. Testing for the edge instead hung the
+    // fetch until the next frame -- and it showed up as the picture getting
+    // WORSE when the modelled DDR3 got faster, which is the signature of a
+    // race rather than a wiring mistake.
+    logic  [7:0] r_got;             // words returned
     logic  [7:0] r_line;            // the line being fetched
     logic        r_fill;            // which local buffer is being filled
     // Which screen line each buffer holds, and whether it holds anything.
@@ -162,13 +172,12 @@ module rf_spr_fb
 
     always_ff @(posedge clk) begin
         if (reset) begin
-            wst <= W_IDLE; rst <= R_IDLE; par <= 1'b0;
+            wst <= W_IDLE; rst <= R_IDLE;
             r_fill <= 1'b0; buf_ok <= 2'b00;
             buf_line[0] <= 8'd0; buf_line[1] <= 8'd0;
-            w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 0;
+            w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 8'd0;
         end else begin
             if (frame_start) begin
-                par    <= ~par;
                 buf_ok <= 2'b00;        // last frame's lines are stale
                 rst    <= R_IDLE;
             end
@@ -205,24 +214,24 @@ module rf_spr_fb
                 R_IDLE: if (!(buf_ok[0] && buf_line[0] == rd_line) &&
                              !(buf_ok[1] && buf_line[1] == rd_line)) begin
                     r_line <= rd_line;   r_fill <= rd_sel;
-                    r_word <= 0; r_got <= 0; rst <= R_REQ;
+                    r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
                 end else if (!(buf_ok[0] && buf_line[0] == rd_line + 8'd1) &&
                              !(buf_ok[1] && buf_line[1] == rd_line + 8'd1)) begin
                     r_line <= rd_line + 8'd1; r_fill <= ~rd_sel;
-                    r_word <= 0; r_got <= 0; rst <= R_REQ;
+                    r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
                 end
                 R_REQ: if (!ddr_busy && ddr_rd) begin
                     if (r_word == WPL - 1) rst <= R_WAIT;
                     else r_word <= r_word + 7'd1;
                 end
-                R_WAIT: if (r_got == WPL - 1 && ddr_dout_ready) begin
+                R_WAIT: if (r_got >= WPL) begin
                     buf_line[r_fill] <= r_line;
                     buf_ok[r_fill]   <= 1'b1;
                     rst              <= R_IDLE;
                 end
                 default: rst <= R_IDLE;
             endcase
-            if (ddr_dout_ready && rst != R_IDLE) r_got <= r_got + 7'd1;
+            if (ddr_dout_ready && rst != R_IDLE) r_got <= r_got + 8'd1;
         end
     end
 

@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -139,6 +140,45 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> fb(320 * V_H, 0);
     int frames_done = 0;
 
+    // ---- DDR3 model for the sprite framebuffer --------------------------
+    // rf_spr_fb writes finished sprite lines here and reads last frame's back
+    // (see rf_spr_fb.sv). Modelling it matters: this is the one memory in the
+    // design whose contents ARE the picture, so an unmodelled DDR3 would mean
+    // the 20-frame pixel gate could not see the sprite path at all.
+    //
+    // The port is the MiSTer one: a command is accepted on any cycle BUSY is
+    // low, and reads come back later on DOUT with DOUT_READY, in order. Both
+    // clients use BURSTCNT 1. DDR_LAT is deliberately far longer than the
+    // real thing (a line is 64.7 us and a round trip is a few hundred ns), so
+    // the bench proves the prefetch has margin rather than assuming it; and
+    // DDR_BUSY_N stalls the port periodically so the FSMs meet back-pressure
+    // instead of an always-ready memory -- the mistake that let the sprite
+    // channel's latency assumption survive so long.
+    const uint32_t DDR_BASE = 0x06000000;          // 0x30000000 in bytes
+    const int DDR_LAT    = getenv("F3_DDR_LAT")  ? atoi(getenv("F3_DDR_LAT"))  : 40;
+    const int DDR_BUSY_N = getenv("F3_DDR_BUSY") ? atoi(getenv("F3_DDR_BUSY")) : 7;
+    std::vector<uint64_t> ddr(2 * 256 * 80, 0);
+    std::deque<std::pair<long long, uint64_t>> ddr_q;   // (ready cycle, data)
+    long long ddr_cyc = 0;
+    auto ddr_tick = [&]() {
+        // stall every DDR_BUSY_N-th cycle
+        int busy = (DDR_BUSY_N > 0) && ((ddr_cyc % DDR_BUSY_N) == 0);
+        t->ddr_busy = busy;
+        if (!busy) {
+            uint32_t a = t->ddr_addr - DDR_BASE;
+            if (t->ddr_we && a < ddr.size()) ddr[a] = t->ddr_din;
+            if (t->ddr_rd)
+                ddr_q.push_back({ddr_cyc + DDR_LAT, a < ddr.size() ? ddr[a] : 0});
+        }
+        t->ddr_dout_ready = 0;
+        if (!ddr_q.empty() && ddr_q.front().first <= ddr_cyc) {
+            t->ddr_dout = ddr_q.front().second;
+            t->ddr_dout_ready = 1;
+            ddr_q.pop_front();
+        }
+        ddr_cyc++;
+    };
+
     auto step = [&]() {
         for (int r = 0; r < 2; r++) {
             if ((cyc * 2 + r) % 11 == 0) continue;
@@ -163,6 +203,7 @@ int main(int argc, char** argv) {
         t->char_q  = ra_h < cram.size() ? cram[ra_h] : 0;
         t->pivot_q = ra_v < vram.size() ? vram[ra_v] : 0;
         t->spr_q   = ra_spr < sram.size() ? sram[ra_spr] : 0;
+        ddr_tick();
         uint32_t nl = t->line_addr, np = t->pf_addr, nc = t->pal_addr;
         uint32_t nt = t->text_addr, nh = t->char_addr, nv = t->pivot_addr, ns = t->spr_addr;
         t->clk = 1; t->eval();
@@ -199,8 +240,14 @@ int main(int argc, char** argv) {
     // -- so reading it in this bench needs F3_FRAMES=20 or more. With the
     // VRAM static, every extra frame is the same frame again, which is
     // exactly what a steady-state timing reading wants.
-    const int NFRAMES = getenv("F3_FRAMES") ? atoi(getenv("F3_FRAMES")) : 3;
-    while (frames_done < NFRAMES) step();     // frame 1 primes, the rest are real
+    // FOUR frames now, not three. The sprite framebuffer adds a frame of lag
+    // -- the draw fills it during one frame and the mixer reads it back in
+    // the next -- which is the lag MAME's config table already specifies for
+    // this game. With the VRAM static every extra frame is the same frame
+    // again, so the only effect is that the compared frame has real sprites
+    // in it rather than an empty framebuffer.
+    const int NFRAMES = getenv("F3_FRAMES") ? atoi(getenv("F3_FRAMES")) : 4;
+    while (frames_done < NFRAMES) step();     // the first two prime
     // through frame_end (raster 0 of the next frame) so the diagnostics
     // printed are frame 3's -- the frame compared below -- not frame 2's
     for (int i = 0; i < 4; i++) step();

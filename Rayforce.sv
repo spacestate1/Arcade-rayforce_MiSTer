@@ -1134,6 +1134,19 @@ wire [23:0] game_rgb;
 wire [31:0] vid_dbg_lines, vid_dbg_fetch, vid_dbg_max, vid_dbg_nz, vid_dbg_spr, vid_dbg_rec;
 wire [31:0] vid_dbg_sfetch;
 
+// ---- the sprite framebuffer's DDR3 port --------------------------------
+wire  [7:0] fb_burstcnt;
+wire [28:0] fb_addr;
+wire [63:0] fb_din, fb_dout;
+wire  [7:0] fb_be;
+wire        fb_we, fb_rd, fb_busy, fb_dout_ready;
+// ...and screen_rotate's, which rf_ddr_arb muxes against it
+wire  [7:0] rot_burstcnt;
+wire [28:0] rot_addr;
+wire [63:0] rot_din;
+wire  [7:0] rot_be;
+wire        rot_we, rot_busy;
+
 rf_video_pipe vpipe
 (
     .clk(clk_sys), .reset(reset), .clk_ram(clk_ram),
@@ -1156,7 +1169,10 @@ rf_video_pipe vpipe
     .rgb(game_rgb),
     .dbg_lines(vid_dbg_lines), .dbg_fetch(vid_dbg_fetch), .dbg_max(vid_dbg_max),
     .dbg_nz(vid_dbg_nz), .dbg_spr(vid_dbg_spr), .dbg_rec(vid_dbg_rec),
-    .dbg_sfetch(vid_dbg_sfetch)
+    .dbg_sfetch(vid_dbg_sfetch),
+    .ddr_burstcnt(fb_burstcnt), .ddr_addr(fb_addr), .ddr_din(fb_din),
+    .ddr_be(fb_be), .ddr_we(fb_we), .ddr_rd(fb_rd),
+    .ddr_busy(fb_busy), .ddr_dout(fb_dout), .ddr_dout_ready(fb_dout_ready)
 );
 
 ///////////////////  SELF TEST PAGE + UART DEBUG  ////////////////
@@ -1308,10 +1324,32 @@ screen_rotate screen_rotate
     .FB_BASE(FB_BASE), .FB_STRIDE(FB_STRIDE),
     .FB_VBL(FB_VBL), .FB_LL(FB_LL),
 
-    .DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(DDRAM_BUSY),
+    // Through rf_ddr_arb rather than straight at the port: the sprite
+    // framebuffer shares it now. screen_rotate's view is unchanged -- it
+    // still sees a port that is busy or not, and it still never reads.
+    .DDRAM_CLK(DDRAM_CLK), .DDRAM_BUSY(rot_busy),
+    .DDRAM_BURSTCNT(rot_burstcnt), .DDRAM_ADDR(rot_addr),
+    .DDRAM_BE(rot_be), .DDRAM_WE(rot_we), .DDRAM_RD(),
+    .DDRAM_DIN(rot_din)
+);
+
+// One DDRAM port, two clients: MiSTer's rotation framebuffer (write only,
+// hard video deadline, wins) and the sprite framebuffer (a whole frame of
+// slack). DDRAM_CLK is CLK_VIDEO, which this core drives from clk_sys, so
+// everything here is in one clock domain.
+rf_ddr_arb ddr_arb
+(
+    .clk(clk_sys),
+    .r_burstcnt(rot_burstcnt), .r_addr(rot_addr), .r_din(rot_din),
+    .r_be(rot_be), .r_we(rot_we), .r_busy(rot_busy),
+    .f_burstcnt(fb_burstcnt), .f_addr(fb_addr), .f_din(fb_din),
+    .f_be(fb_be), .f_we(fb_we), .f_rd(fb_rd),
+    .f_busy(fb_busy), .f_dout(fb_dout), .f_dout_ready(fb_dout_ready),
+    .DDRAM_BUSY(DDRAM_BUSY),
     .DDRAM_BURSTCNT(DDRAM_BURSTCNT), .DDRAM_ADDR(DDRAM_ADDR),
-    .DDRAM_BE(DDRAM_BE), .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
-    .DDRAM_DIN(DDRAM_DIN)
+    .DDRAM_DIN(DDRAM_DIN), .DDRAM_BE(DDRAM_BE),
+    .DDRAM_WE(DDRAM_WE), .DDRAM_RD(DDRAM_RD),
+    .DDRAM_DOUT(DDRAM_DOUT), .DDRAM_DOUT_READY(DDRAM_DOUT_READY)
 );
 
 endmodule

@@ -143,10 +143,23 @@ module rf_video_spr
     output logic        ch_b_hi_req,
     input  logic        ch_b_hi_ready,
 
-    input  logic  [8:0] rd_x,           // 0..319 (raster x - 46)
     input  logic  [7:0] rd_line,        // line the mixer is composing
-    output logic [15:0] rd_color,       // 0 = none
-    output logic  [3:0] rd_used
+    output logic  [3:0] rd_used,        // priority groups present on it
+
+    // ---- the line just finished, for rf_spr_fb to stream to DDR3 --------
+    // The draw no longer races the raster: it fills one bank while the
+    // framebuffer writer empties the other, and a line is published by
+    // handing it over here rather than by the mixer catching up to it.
+    output logic        o_par,          // parity of the frame being drawn
+    output logic        fb_req,         // pulse: fb_line is ready in the
+    output logic  [7:0] fb_line,        //        bank the writer may read
+    output logic  [3:0] fb_used,        // that line's priority groups, handed
+                                        // over with it: rd_used reports the
+                                        // frame being SHOWN, so it cannot
+                                        // answer for the line just drawn
+    input  logic        fb_busy,        // writer still emptying the other
+    input  logic  [8:0] fb_addr,        // writer's read port into the buffer
+    output logic [15:0] fb_q
 );
     // Visible span. X is the same for every F3 game; the Y pair is the
     // game's visarea and MUST follow vis_mode -- it is the per-row clip that
@@ -452,28 +465,39 @@ module rf_video_spr
     // so 8 -> 16 banks is +8 M10K against 12 free (541/553 in build
     // 29224005). The tag stays inside the 20-bit word -- it is
     // {par, line[7:NBW]}, and a wider NBW makes it SHORTER, 5 bits at NB=16.
-    localparam int NB  = 16;
+    // TWO banks, ping-pong: the draw fills one while rf_spr_fb streams the
+    // other to DDR3. The ring used to be 16 deep because its whole job was
+    // to bank slack against the raster; with a frame buffered in DDR3 that
+    // job is gone, and 14 banks of M10K come back on a device at 551/553.
+    localparam int NB  = 2;
     localparam int NBW = $clog2(NB);
 
     logic            wr_en;
     logic [NBW+8:0]  wr_addr;
-    logic [19:0]     wr_data, lb_q;
+    logic [15:0]     wr_data;
 
-    rf_bram #(.WIDTH(20), .AW(NBW + 9)) u_lbuf (
+    // The draw writes the bank it is filling; the framebuffer writer reads
+    // the one it was handed. The mixer does not read this at all any more --
+    // it reads DDR3, a frame later -- so the entry loses its tag and is just
+    // the 13-bit colour. The tag existed to catch the mixer asking for a line
+    // the draw had not reached, which is a state that no longer exists.
+    rf_bram #(.WIDTH(16), .AW(NBW + 9)) u_lbuf (
         .clk(clk),
         .waddr(wr_addr), .wdata(wr_data), .wren(wr_en),
-        .raddr({rd_line[NBW-1:0], rd_x}), .q(lb_q)
+        .raddr({~dbank, fb_addr}), .q(fb_q)
     );
     // the parity of the frame being drawn; the mixer reads the line the draw
-    // wrote in this same frame (the draw runs ahead of it, never behind), and
-    // the only window where the two disagree -- frame_start to the mixer's
-    // line 0, raster 260-261 -- has no mixing in it
-    logic par;
-    wire [6:0] rd_tag = {par, rd_line[7:NBW]};
-    assign rd_color = (lb_q[19:13] == rd_tag) ? {3'd0, lb_q[12:0]} : 16'd0;
+    logic par;                          // parity of the frame being DRAWN
+    assign o_par = par;
+    logic dbank;                        // the bank the draw is filling
 
-    logic [3:0] used_bank [0:NB-1];
-    assign rd_used = used_bank[rd_line[NBW-1:0]];
+    // The per-line priority-group flags have to lag with the pixels they
+    // describe, so they are double banked the same way the framebuffer is:
+    // written for the frame being drawn, read for the frame being shown.
+    // 2 x 256 x 4 bits is nothing, and keeping them on chip avoids widening
+    // the DDR3 word to carry four bits that are constant across a line.
+    logic [3:0] used_line [0:1][0:255];
+    assign rd_used = used_line[~par][rd_line];
 
     // ---- the run-ahead window ----------------------------------------------
     // nxt is the next line to draw (256 = the frame is done). The draw may
@@ -482,8 +506,11 @@ module rf_video_spr
     // draw restarts at 0) needs no special case.
     logic        active;
     logic  [8:0] nxt;
-    wire   [7:0] ahead    = nxt[7:0] - rd_line;
-    wire         can_draw = active && !nxt[8] && (ahead <= 8'(NB - 1));
+    // The only thing that can hold the draw up now is the framebuffer writer
+    // still emptying the bank this line wants. There is no per-line deadline
+    // left: the draw has the whole frame for its 256 lines, and the frame is
+    // only ~15 % full of sprite work.
+    wire         can_draw = active && !nxt[8];
     assign lines_done = nxt;
 
     // ================= PREPASS FSM (writes bank wb) =================
@@ -700,6 +727,7 @@ module rf_video_spr
     always_ff @(posedge clk) begin
         gfx_req <= 2'b00;
         wr_en   <= 1'b0;
+        fb_req  <= 1'b0;
         fc_ok   <= 1'b1;                 // cleared below whenever fc changes
 
         // capture completions (bus i serves slot i)
@@ -717,6 +745,7 @@ module rf_video_spr
         if (reset) begin
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
             active <= 1'b0; nxt <= 9'd0; par <= 1'b0; ir_open <= 1'b0;
+            dbank <= 1'b0; fb_line <= 8'd0; fb_used <= 4'd0;
             f_cnt[0] <= 0; f_cnt[1] <= 0; f_max <= 0; f_max_q <= 0;
             rows_line <= 0; rows_line_pk <= 0; rows_line_pk_q <= 0;
             gfx_busy_d <= 2'b00;
@@ -744,12 +773,12 @@ module rf_video_spr
                 q_busy  <= 2'b00; q_ready <= 2'b00;
                 q_is    <= 1'b0;  q_cs    <= 1'b0;
                 cur     <= 1'b0;
-                clr_x   <= span_lo[nxt[NBW-1:0]];
-                clr_hi  <= span_hi[nxt[NBW-1:0]];
+                clr_x   <= span_lo[dbank];
+                clr_hi  <= span_hi[dbank];
                 cur_lo  <= 9'd511; cur_hi <= 9'd0;             // this line: empty
                 if (rows_line > rows_line_pk) rows_line_pk <= rows_line;
                 rows_line <= 16'd0;
-                dst <= (span_lo[nxt[NBW-1:0]] > span_hi[nxt[NBW-1:0]]) ? D_LEAD0 : D_CLR;
+                dst <= (span_lo[dbank] > span_hi[dbank]) ? D_LEAD0 : D_CLR;
             end
 
             // Clear this line's bank: 320 writes, ~9 % of the frame's clocks
@@ -759,8 +788,8 @@ module rf_video_spr
             // the end of this.
             D_CLR: begin
                 wr_en   <= 1'b1;
-                wr_addr <= {dr_line[NBW-1:0], clr_x};
-                wr_data <= 20'd0;
+                wr_addr <= {dbank, clr_x};
+                wr_data <= 16'd0;
                 clr_x   <= clr_x + 9'd1;
                 if (clr_x >= clr_hi) dst <= D_LEAD0;
             end
@@ -768,9 +797,9 @@ module rf_video_spr
             // the run table answers for {rb, nxt} (presented during D_IDLE)
             D_LEAD0: begin
                 if (bt_q[RW-1:0] == bt_q[2*RW-1:RW]) begin
-                    used_bank[dr_line[NBW-1:0]] <= dr_used;     // empty line
-                    span_lo[dr_line[NBW-1:0]] <= cur_lo;        // nothing written
-                    span_hi[dr_line[NBW-1:0]] <= cur_hi;
+                    used_line[par][dr_line] <= dr_used;         // empty line
+                    span_lo[dbank] <= cur_lo;                  // nothing written
+                    span_hi[dbank] <= cur_hi;
                     dst <= D_DONE;
                 end else begin
                     fc    <= bt_q[RW-1:0];
@@ -823,17 +852,17 @@ module rf_video_spr
                         // next record instead of spending 17 cycles on it
                         cur  <= q_any;
                     end else if (!q_busy[q_cs] && fc == fe) begin
-                        used_bank[dr_line[NBW-1:0]] <= dr_used;
-                        span_lo[dr_line[NBW-1:0]] <= cur_lo;
-                        span_hi[dr_line[NBW-1:0]] <= cur_hi;
+                        used_line[par][dr_line] <= dr_used;
+                        span_lo[dbank] <= cur_lo;
+                        span_hi[dbank] <= cur_hi;
                         dst <= D_DONE;
                     end
                     // else wait for the oldest fetch to land
                 end else begin
                     if (dr_vis && dr_pen != 5'd0) begin
                         wr_en   <= 1'b1;
-                        wr_addr <= {dr_line[NBW-1:0], dr_ix};
-                        wr_data <= {par, dr_line[7:NBW], dr_base | {8'd0, dr_pen}};
+                        wr_addr <= {dbank, dr_ix};
+                        wr_data <= {3'd0, dr_base | {8'd0, dr_pen}};
                         dr_used <= dr_used | (4'd1 << dr_pri);
                         if (dr_ix < cur_lo) cur_lo <= dr_ix;
                         if (dr_ix > cur_hi) cur_hi <= dr_ix;
@@ -843,9 +872,22 @@ module rf_video_spr
                 end
             end
 
-            D_DONE: begin
-                nxt <= nxt + 9'd1;
-                dst <= D_IDLE;
+            // Publish the line: hand the bank to rf_spr_fb and start filling
+            // the other one. can_draw holds the next line off until the
+            // writer has finished, which is the only back-pressure left.
+            // Hand over only when the writer can take it. wr_req is a pulse
+            // and rf_spr_fb accepts it only in W_IDLE, so issuing it while
+            // the writer was still emptying the previous line dropped that
+            // line silently -- it never reached DDR3 and its sprites simply
+            // were not there. Waiting here also guarantees dbank cannot flip
+            // under the writer, which reads the bank as ~dbank.
+            D_DONE: if (!fb_busy) begin
+                fb_req  <= 1'b1;
+                fb_line <= dr_line;
+                fb_used <= dr_used;
+                dbank   <= ~dbank;
+                nxt     <= nxt + 9'd1;
+                dst     <= D_IDLE;
             end
             default: dst <= D_IDLE;
         endcase

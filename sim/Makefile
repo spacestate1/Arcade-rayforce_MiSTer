@@ -96,7 +96,7 @@ mix_ref.txt: gen_mix_ref.py ../tools/f3_render.py
 obj_dir/mixtb: mix_tb.cpp mix_top.sv $(MIX_RTL)
 	$(VERILATOR) $(VFLAGS) --top-module mix_top mix_top.sv $(MIX_RTL) mix_tb.cpp -o mixtb
 
-PIPE_RTL = $(MIX_RTL) $(RTL)/rf_video_pivot.sv $(RTL)/rf_video_spr_list.sv $(RTL)/rf_spr_gfx_bus.sv $(RTL)/rf_spr_ch_share.sv $(RTL)/rf_video_spr.sv $(RTL)/rf_video_pipe.sv
+PIPE_RTL = $(MIX_RTL) $(RTL)/rf_video_pivot.sv $(RTL)/rf_video_spr_list.sv $(RTL)/rf_spr_gfx_bus.sv $(RTL)/rf_spr_ch_share.sv $(RTL)/rf_spr_fb.sv $(RTL)/rf_video_spr.sv $(RTL)/rf_video_pipe.sv
 
 # ---- sprite list walker (stage a) ----
 spr: obj_dir/sprtb spr_ref.txt

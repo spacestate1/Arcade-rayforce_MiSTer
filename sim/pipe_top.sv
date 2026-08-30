@@ -67,6 +67,17 @@ module pipe_top (
     output logic [31:0] dbg_fetch,
     output logic [31:0] dbg_max,
     output logic [31:0] dbg_nz,
+    // the sprite framebuffer's DDR3 port, modelled in pipe_tb.cpp
+    output logic  [7:0] ddr_burstcnt,
+    output logic [28:0] ddr_addr,
+    output logic [63:0] ddr_din,
+    output logic  [7:0] ddr_be,
+    output logic        ddr_we,
+    output logic        ddr_rd,
+    input  logic        ddr_busy,
+    input  logic [63:0] ddr_dout,
+    input  logic        ddr_dout_ready,
+
     output logic [31:0] dbg_sfetch,
     output logic [31:0] dbg_spr,
     output logic [31:0] dbg_rec,
@@ -99,7 +110,10 @@ module pipe_top (
         .rgb(rgb),
         .dbg_lines(dbg_lines), .dbg_fetch(dbg_fetch),
         .dbg_max(dbg_max), .dbg_nz(dbg_nz), .dbg_spr(dbg_spr), .dbg_rec(dbg_rec),
-        .dbg_sfetch(dbg_sfetch)
+        .dbg_sfetch(dbg_sfetch),
+        .ddr_burstcnt(ddr_burstcnt), .ddr_addr(ddr_addr), .ddr_din(ddr_din),
+        .ddr_be(ddr_be), .ddr_we(ddr_we), .ddr_rd(ddr_rd),
+        .ddr_busy(ddr_busy), .ddr_dout(ddr_dout), .ddr_dout_ready(ddr_dout_ready)
     );
 
     // Bus A's planes on channel 1, bus B's on channel 2. The sharer's b_*
