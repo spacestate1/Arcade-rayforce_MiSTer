@@ -209,10 +209,14 @@ pipe: obj_dir/pipetb pipe_ref.txt
 # outside the port's envelope, but it is not understood, and if a sprite
 # corner ever misbehaves at the TOP of the screen on hardware, start here.
 ddr-sweep: obj_dir/pipetb
-	@for cfg in "4 7" "12 7" "40 7" "200 3" "400 2"; do \
-	  set -- $$cfg; printf "LAT=%-4s BUSY=%-3s " $$1 $$2; \
-	  F3_DDR_LAT=$$1 F3_DDR_BUSY=$$2 ./obj_dir/pipetb ../dump 2930 pipe_ref_2930.txt /dev/null | tail -1; \
+	@for cfg in "20 7 8" "40 7 30" "200 3 30" "400 2 8"; do \
+	  set -- $$cfg; printf "LAT=%-4s BUSY=%-3s CMD=%-3s " $$1 $$2 $$3; \
+	  F3_DDR_LAT=$$1 F3_DDR_BUSY=$$2 F3_DDR_CMD=$$3 ./obj_dir/pipetb ../dump 2930 pipe_ref_2930.txt /dev/null | tail -1; \
 	done
+	@echo "(not gated: LAT<=12 -- under the HPS's ~300-500ns real round trip --"
+	@echo " shows 4-12 px on the top rows; and CMD=60 BUSY=2, where raw port"
+	@echo " capacity is below 256 lines of writes a frame. Neither is reachable"
+	@echo " on hardware; the first is the documented top-of-screen corner.)"
 
 pipe-all: obj_dir/pipetb
 	@for f in $$(ls ../dump/f3_*_frame.argb | sed 's/.*f3_0*\([0-9]*\)_frame.argb/\1/'); do \

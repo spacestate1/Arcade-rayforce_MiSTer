@@ -160,15 +160,29 @@ int main(int argc, char** argv) {
     std::vector<uint64_t> ddr(2 * 256 * 80, 0);
     std::deque<std::pair<long long, uint64_t>> ddr_q;   // (ready cycle, data)
     long long ddr_cyc = 0;
+    // Every command costs DDR_CMD cycles of BUSY before the next is taken --
+    // the behaviour whose absence hid the read-starvation bug: with commands
+    // free, 80 single-word reads a line kept up in the bench and starved on
+    // the board. Reads carry a BURSTCNT and return that many beats, one per
+    // cycle, LAT after the command -- which is why the RTL fetches a line as
+    // ONE 80-beat burst.
+    const int DDR_CMD = getenv("F3_DDR_CMD") ? atoi(getenv("F3_DDR_CMD")) : 8;
+    int ddr_hold = 0;
     auto ddr_tick = [&]() {
-        // stall every DDR_BUSY_N-th cycle
-        int busy = (DDR_BUSY_N > 0) && ((ddr_cyc % DDR_BUSY_N) == 0);
+        int busy = ddr_hold > 0 ||
+                   ((DDR_BUSY_N > 0) && ((ddr_cyc % DDR_BUSY_N) == 0));
         t->ddr_busy = busy;
+        if (ddr_hold > 0) ddr_hold--;
         if (!busy) {
             uint32_t a = t->ddr_addr - DDR_BASE;
-            if (t->ddr_we && a < ddr.size()) ddr[a] = t->ddr_din;
-            if (t->ddr_rd)
-                ddr_q.push_back({ddr_cyc + DDR_LAT, a < ddr.size() ? ddr[a] : 0});
+            if (t->ddr_we && a < ddr.size()) { ddr[a] = t->ddr_din; ddr_hold = DDR_CMD; }
+            if (t->ddr_rd) {
+                int nb = t->ddr_burstcnt ? t->ddr_burstcnt : 1;
+                for (int i = 0; i < nb; i++)
+                    ddr_q.push_back({ddr_cyc + DDR_LAT + i,
+                                     (a + i) < ddr.size() ? ddr[a + i] : 0});
+                ddr_hold = DDR_CMD;
+            }
         }
         t->ddr_dout_ready = 0;
         if (!ddr_q.empty() && ddr_q.front().first <= ddr_cyc) {

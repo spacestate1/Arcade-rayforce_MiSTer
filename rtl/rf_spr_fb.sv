@@ -170,16 +170,33 @@ module rf_spr_fb
     end
 
     // ================= the port ==========================================
-    // Writes win: the draw hands over one line at a time and must not be
-    // held up, while a read prefetch has a whole line of slack.
-    assign ddr_burstcnt = 8'd1;
+    // READS WIN, and a line is fetched as ONE 80-beat burst.
+    //
+    // Both are lessons from the board, not the bench. The first version gave
+    // writes priority and issued reads one word at a time; the bench's
+    // memory accepted a command every cycle, so it was exact to a 400-cycle
+    // latency -- and on the board the sprites shredded into dashes. Dumping
+    // the framebuffer back out of DDR3 through the HPS (/dev/mem mmap)
+    // proved the STORED image perfect while the screen was broken: writes
+    // were landing, and the read-back was starving behind them -- 80
+    // commands a line on a port that takes real time per command, behind a
+    // draw that free-runs its whole frame of writes at the start of the
+    // raster.
+    //
+    // So: the reader goes first (the mixer is the one with a deadline; the
+    // writer has the whole frame), and a line is ONE burst command whose 80
+    // beats stream back on DOUT_READY -- which is what BURSTCNT exists for.
+    // The write side stays single-beat: the stored dump proves it keeps up,
+    // and single beats let rotation's writes slot between ours without the
+    // arbiter needing a lock.
+    assign ddr_burstcnt = (rst == R_REQ) ? 8'd80 : 8'd1;
     assign ddr_be       = 8'hFF;
-    assign ddr_we       = (wst == W_ISSUE);
-    assign ddr_rd       = (wst != W_ISSUE) && (rst == R_REQ);
+    assign ddr_rd       = (rst == R_REQ);
+    assign ddr_we       = (wst == W_ISSUE) && (rst != R_REQ);
     assign ddr_din      = w_acc;
-    assign ddr_addr     = (wst == W_ISSUE)
-                        ? (line_word(w_bank, w_line) + 29'(w_word))
-                        : (line_word(~par, nf[7:0]) + 29'(r_word));
+    assign ddr_addr     = (rst == R_REQ)
+                        ? line_word(~par, nf[7:0])
+                        : (line_word(w_bank, w_line) + 29'(w_word));
 
     always_ff @(posedge clk) begin
         if (reset) begin
@@ -209,7 +226,9 @@ module rf_spr_fb
                     if (w_pix == 2'd3) wst <= W_ISSUE;
                     else begin w_pix <= w_pix + 2'd1; wst <= W_RD; end
                 end
-                W_ISSUE: if (!ddr_busy) begin
+                // advance only on a cycle our write was actually on the bus
+                // (a pending read command masks ddr_we)
+                W_ISSUE: if (!ddr_busy && ddr_we) begin
                     w_pix <= 2'd0;
                     if (w_word == WPL - 1) wst <= W_IDLE;
                     else begin w_word <= w_word + 7'd1; wst <= W_RD; end
@@ -225,10 +244,8 @@ module rf_spr_fb
                     r_fill <= nf[1:0];
                     r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
                 end
-                R_REQ: if (!ddr_busy && ddr_rd) begin
-                    if (r_word == WPL - 1) rst <= R_WAIT;
-                    else r_word <= r_word + 7'd1;
-                end
+                // one command for the whole line; the beats stream back
+                R_REQ: if (!ddr_busy) rst <= R_WAIT;
                 // >=, not the exact cycle the last word lands: with a fast
                 // memory the returns keep pace with the requests and this
                 // counter is already past it by the time R_WAIT is entered.
