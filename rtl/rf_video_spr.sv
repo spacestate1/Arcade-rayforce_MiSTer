@@ -111,6 +111,15 @@ module rf_video_spr
 
     output logic [15:0] rec_peak,       // records the last prepass built
     output logic [15:0] rec_drop,       // sprite rows it had no room for
+    // Why a line is slow, which the clock count alone cannot say: is it
+    // carrying a lot of rows, or is each row's fetch slow? SPRLINE says a
+    // line took 15864 clocks; the worst line in every dumped frame carries
+    // only 61 rows, and the draw loop is 17 clocks a row, so either the
+    // board's lines are far denser than any dump (all of them are attract)
+    // or a row costs ~260 clocks and is almost all fetch wait. These two
+    // numbers divide one case from the other.
+    output logic [15:0] fetch_max,      // longest single gfx fetch, in clocks
+    output logic [15:0] rows_line_max,  // most rows drawn on one line
 
     output logic [14:0] spr_addr,       // sprite RAM (walker)
     input  logic [15:0] spr_q,
@@ -407,16 +416,24 @@ module rf_video_spr
     // It costs no memory: line[7:NBW] is 6 bits for NB = 4, so the tag is
     // still 7 bits and an entry still 20, i.e. NB x 512 x 20 bits = NB/2
     // M10Ks (2 banks were three M10Ks at 21 bits).
-    // NB = 8, not 4. Measured on the board in attract, 2026-08-28: the worst
-    // line needs 16567 clocks and the budget is 3456, so the draw has to bank
-    // slack across quiet lines. NB gives (NB-1) lines of it plus the line's
-    // own budget -- 13824 clocks at NB=4, which is UNDER the worst case, and
-    // the counters showed exactly that: late lines arriving in bursts (0 ->
-    // 4770 -> 6820) whenever a scene got busy, i.e. sprites missing or
-    // partial in the middle of a level and before the first boss. NB=8 gives
-    // 27648, comfortably past it. Costs 4 more M10Ks; the tag is unchanged
-    // because it is {par, line[7:NBW]}, still 7 bits.
-    localparam int NB  = 8;
+    // NB = 16, was 8, was 4. The draw has to bank slack across quiet lines:
+    // the budget is 3456 clocks a line and the board's worst line needs
+    // ~16000, so what matters is how many lines of slack the ring holds --
+    // NB x 3456 in total.
+    //
+    //   NB=4   13824 clocks   under the worst single line; late lines came
+    //                         in bursts (0 -> 4770 -> 6820) as scenes got busy
+    //   NB=8   27648          covers any ONE line (the worst is 57 % of it),
+    //                         but not a RUN of heavy lines -- which is what
+    //                         a boss fight is, and the board still glitched
+    //                         there with late lines saturating at 65535
+    //   NB=16  55296          two full bosses' worth of run
+    //
+    // The cost is memory, not logic: the line buffer is NB x 512 x 20 bits,
+    // so 8 -> 16 banks is +8 M10K against 12 free (541/553 in build
+    // 29224005). The tag stays inside the 20-bit word -- it is
+    // {par, line[7:NBW]}, and a wider NBW makes it SHORTER, 5 bits at NB=16.
+    localparam int NB  = 16;
     localparam int NBW = $clog2(NB);
 
     logic            wr_en;
@@ -459,6 +476,8 @@ module rf_video_spr
     } pst_t;
     pst_t pst;
     assign prepass_busy = (pst != P_IDLE);
+    assign fetch_max     = f_max_q;
+    assign rows_line_max = rows_line_pk_q;
 
     // One row of the walk, shared by both passes so they cannot disagree
     // about where a run starts and ends (pass 1 counts what pass 2 places).
@@ -649,6 +668,16 @@ module rf_video_spr
     logic [8:0] span_hi [0:NB-1];
     logic [8:0] cur_lo, cur_hi;
 
+    // ---- fetch/density diagnostics (see the ports) ----------------------
+    // f_cnt runs while a bus has a fetch outstanding and is banked at the
+    // fall; rows_line counts the rows ISSUED on the line being drawn. Both
+    // peaks are per frame and are published at frame_start, which is the
+    // only moment the draw is guaranteed idle.
+    logic [15:0] f_cnt   [0:1];
+    logic [15:0] f_max, f_max_q;
+    logic [15:0] rows_line, rows_line_pk, rows_line_pk_q;
+    logic  [1:0] gfx_busy_d;
+
     always_ff @(posedge clk) begin
         gfx_req <= 2'b00;
         wr_en   <= 1'b0;
@@ -658,9 +687,20 @@ module rf_video_spr
         if (gfx_valid[0] && q_busy[0]) begin q_pix[0] <= gfx_pix[0]; q_ready[0] <= 1'b1; end
         if (gfx_valid[1] && q_busy[1]) begin q_pix[1] <= gfx_pix[1]; q_ready[1] <= 1'b1; end
 
+        // longest single fetch: count while a bus is busy, bank it at the fall
+        gfx_busy_d <= gfx_busy;
+        for (int b = 0; b < 2; b++) begin
+            if (gfx_busy[b]) f_cnt[b] <= f_cnt[b] + 16'd1;
+            else             f_cnt[b] <= 16'd0;
+            if (gfx_busy_d[b] && !gfx_busy[b] && f_cnt[b] > f_max) f_max <= f_cnt[b];
+        end
+
         if (reset) begin
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
             active <= 1'b0; nxt <= 9'd0; par <= 1'b0; ir_open <= 1'b0;
+            f_cnt[0] <= 0; f_cnt[1] <= 0; f_max <= 0; f_max_q <= 0;
+            rows_line <= 0; rows_line_pk <= 0; rows_line_pk_q <= 0;
+            gfx_busy_d <= 2'b00;
             for (int b = 0; b < NB; b++) begin
                 span_lo[b] <= 9'd511; span_hi[b] <= 9'd0;      // empty
             end
@@ -674,6 +714,10 @@ module rf_video_spr
             // busy until it lands, which the issue rule waits for.
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
             active <= 1'b1; nxt <= 9'd0; ir_open <= 1'b0;
+            // publish last frame's peaks and start fresh
+            f_max_q        <= f_max;        f_max        <= 16'd0;
+            rows_line_pk_q <= rows_line_pk; rows_line_pk <= 16'd0;
+            rows_line      <= 16'd0;
         end else case (dst)
             D_IDLE: if (can_draw) begin
                 dr_line <= nxt[7:0];
@@ -684,6 +728,8 @@ module rf_video_spr
                 clr_x   <= span_lo[nxt[NBW-1:0]];
                 clr_hi  <= span_hi[nxt[NBW-1:0]];
                 cur_lo  <= 9'd511; cur_hi <= 9'd0;             // this line: empty
+                if (rows_line > rows_line_pk) rows_line_pk <= rows_line;
+                rows_line <= 16'd0;
                 dst <= (span_lo[nxt[NBW-1:0]] > span_hi[nxt[NBW-1:0]]) ? D_LEAD0 : D_CLR;
             end
 
@@ -738,6 +784,7 @@ module rf_video_spr
                         ir_row  <= is_next;
                     end
                     q_is  <= ~q_is;
+                    rows_line <= rows_line + 16'd1;
                 end
 
                 // ---- draw the current record / promote the next / finish

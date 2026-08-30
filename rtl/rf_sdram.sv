@@ -360,28 +360,21 @@ always @(posedge clk) begin
                 command    <= CMD_ACTIVE;
                 state      <= STATE_WAIT;
             end
-            else if(ch3_rq) begin
-                chip       <= ch3_addr_1[26];
-                saved_data <= ch3_din_1;
-                saved_wr   <= ~ch3_rnw_1;
-                ch         <= 2;
-                ch3_rq     <= 0;
-                if (ch3_rnw_1) 
-                    {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch3_addr_1[25:1]};
-                else
-                    {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {~ch3_be_1, 1'b1, ch3_addr_1[25:1]};
-                command    <= CMD_ACTIVE;
-                state      <= STATE_WAIT;
-            end
-            else if(ch5_rq) begin
-                {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch5_addr[25:1]};
-                chip       <= ch5_addr[26];
-                saved_wr   <= 0;
-                ch         <= 4;
-                ch5_rq     <= 0;
-                command    <= CMD_ACTIVE;
-                state      <= STATE_WAIT;
-            end
+            // The sprite pair now sits ABOVE the main CPU (ch3) and the sound
+            // CPU (ch5), where it used to sit below both. Measured on build
+            // 29224005: the board's longest sprite line was 15864 clocks
+            // while the worst line in any dumped frame carries 61 rows and
+            // the draw loop is 17 clocks a row -- so ~93 % of a row's time
+            // was spent waiting, on a bus only 45-63 % utilised. That is a
+            // priority problem, not a bandwidth one.
+            //
+            // What this costs: the main CPU and the sound CPU stall a little
+            // longer on a dense line. Both can absorb it and a sprite line
+            // cannot -- the CPU paces itself off vblank and has rf_prog_bus's
+            // line cache in front of it, the sound CPU's deadline is a whole
+            // sample period, while a sprite line that misses its deadline is
+            // simply drawn incomplete. HANDOFF named this trade as the cheap
+            // alternative before the second channel was tried.
             // ---- the two sprite graphics channels, served FAIRLY ------
             // ch4 is sprite fetch bus A, ch7 bus B. They alternate: whoever
             // was served last yields to the other next time.
@@ -424,6 +417,28 @@ always @(posedge clk) begin
                 ch         <= 6;
                 ch7_rq     <= 0;
                 spr_tog    <= 1'b0;             // next sprite burst: prefer ch4
+                command    <= CMD_ACTIVE;
+                state      <= STATE_WAIT;
+            end
+            else if(ch3_rq) begin
+                chip       <= ch3_addr_1[26];
+                saved_data <= ch3_din_1;
+                saved_wr   <= ~ch3_rnw_1;
+                ch         <= 2;
+                ch3_rq     <= 0;
+                if (ch3_rnw_1) 
+                    {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch3_addr_1[25:1]};
+                else
+                    {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {~ch3_be_1, 1'b1, ch3_addr_1[25:1]};
+                command    <= CMD_ACTIVE;
+                state      <= STATE_WAIT;
+            end
+            else if(ch5_rq) begin
+                {cas_addr[12:9],SDRAM_BA,SDRAM_A,cas_addr[8:0]} <= {2'b00, 1'b1, ch5_addr[25:1]};
+                chip       <= ch5_addr[26];
+                saved_wr   <= 0;
+                ch         <= 4;
+                ch5_rq     <= 0;
                 command    <= CMD_ACTIVE;
                 state      <= STATE_WAIT;
             end

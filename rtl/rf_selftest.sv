@@ -70,6 +70,7 @@ module rf_selftest #(
     input  logic [31:0] vid_fetch,     // dbg_fetch
     input  logic [31:0] vid_max,       // dbg_max
     input  logic [31:0] vid_nz,        // dbg_nz
+    input  logic [31:0] vid_sfetch,    // dbg_sfetch {longest fetch, rows/line}
     input  logic [31:0] vid_spr,       // dbg_spr
     input  logic [31:0] vid_rec,       // dbg_rec
     input  logic [31:0] snd_diag1,     // {pivot RAM writes, sound CPU PC[15:0]}
@@ -215,9 +216,19 @@ module rf_selftest #(
                  STA = (txt_wr_cnt  != 16'd0) ? ST_PASS :                    \
                        cpu_running ? ST_BUSY : ST_WAIT; end                  \
         5'd26: VAL = build_hex;                                              \
-        5'd22: begin VAL = vid_lines;                                        \
-                 STA = (vid_lines == 32'h01000100) ? ST_PASS :               \
-                       cpu_running ? ST_FAIL : ST_WAIT; end                  \
+        /* SPRFETCH:ROWMAX -- {longest single sprite gfx fetch in clocks,   \
+           most rows drawn on one line}. This row replaced MIX : BUILD,      \
+           whose value is the constant 01000100 whenever the pipe runs at    \
+           all and which MAXFETCH:BUILD and TILE NZ already imply; the page   \
+           is exactly 28 rows over 224 lines, so a new row costs an old one. \
+           It exists to divide the two explanations of a slow sprite line:   \
+           many rows, or slow fetches. The draw loop is 17 clocks a row, and \
+           the worst line in every dumped frame carries 61 rows -- but every  \
+           dump is attract, and the board glitches in boss fights. No pass    \
+           criterion: it is a measurement, and what counts as too slow is    \
+           exactly what is not known yet. */                                 \
+        5'd22: begin VAL = vid_sfetch;                                       \
+                 STA = !cpu_running ? ST_WAIT : ST_PASS; end                 \
         5'd23: begin VAL = vid_fetch;   /* FETCH : PIX NZ  (sticky, above) */ \
                  STA = !cpu_running ? ST_WAIT :                              \
                        fetch_seen   ? ST_PASS : ST_BUSY; end                 \

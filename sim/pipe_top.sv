@@ -67,6 +67,7 @@ module pipe_top (
     output logic [31:0] dbg_fetch,
     output logic [31:0] dbg_max,
     output logic [31:0] dbg_nz,
+    output logic [31:0] dbg_sfetch,
     output logic [31:0] dbg_spr,
     output logic [31:0] dbg_rec,
     input  logic  [1:0] vis_mode
@@ -97,7 +98,8 @@ module pipe_top (
         .spr_b_hi_addr(b_hi_addr), .spr_b_hi_dout(b_hi_dout), .spr_b_hi_req(b_hi_req), .spr_b_hi_ready(b_hi_ready),
         .rgb(rgb),
         .dbg_lines(dbg_lines), .dbg_fetch(dbg_fetch),
-        .dbg_max(dbg_max), .dbg_nz(dbg_nz), .dbg_spr(dbg_spr), .dbg_rec(dbg_rec)
+        .dbg_max(dbg_max), .dbg_nz(dbg_nz), .dbg_spr(dbg_spr), .dbg_rec(dbg_rec),
+        .dbg_sfetch(dbg_sfetch)
     );
 
     // Bus A's planes on channel 1, bus B's on channel 2. The sharer's b_*

@@ -44,7 +44,7 @@ PAGE = [
     ("LINE RAM",                            1, 1),
     ("TEXT AND CHAR",                       1, 1),
     ("-- VIDEO PIPELINE / FRAME -----------", 0, 0),
-    ("MIX : BUILD",                         1, 1),
+    ("SPRFETCH:ROWMAX",                     1, 1),   # {longest single sprite gfx fetch in clocks, most rows drawn on one line}
     ("FETCH : PIX NZ",                      1, 1),
     ("MAXFETCH:BUILD",                      1, 1),
     ("TILE NZ:PF:PAL",                      1, 1),

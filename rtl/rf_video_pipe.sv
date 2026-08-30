@@ -121,6 +121,11 @@ module rf_video_pipe
     output logic [31:0] dbg_nz,        // {fetches with non-zero pixels,
                                        //  OR of playfield samples[7:0],
                                        //  OR of palette reads[7:0]}
+    // {longest single sprite gfx fetch in clocks, most rows drawn on one
+    // line}. SPRLINE gives a line's total; these two say which half of it
+    // is fetch wait and which is sheer density -- the question the dumps
+    // cannot answer because every one of them is attract.
+    output logic [31:0] dbg_sfetch,
     output logic [31:0] dbg_spr,       // {longest sprite line draw in clocks,
                                        //  lines the mixer started before the
                                        //  sprite draw had finished them}
@@ -269,8 +274,10 @@ module rf_video_pipe
     // the game's own bit once the prepass has read it; the port until then
     wire         flip_eff = spr_flipscreen;
     logic [15:0] spr_rec_peak, spr_rec_drop;
+    logic [15:0] spr_fetch_max, spr_rows_line_max;
     // peak-hold accumulators for the two sprite rows (see frame_end below)
     logic [15:0] h_spr_max, h_late, h_rec_max, h_drop;
+    logic [15:0] h_fetch_max, h_rows_max;
     // ...held from the WARM frame on. The first frames after a reset have no
     // sprite buckets built yet, so the mixer legitimately starts lines the
     // draw has not reached and the late counter would latch a permanent FAIL
@@ -288,6 +295,7 @@ module rf_video_pipe
         .line_busy(spr_line_busy), .lines_done(spr_lines_done),
         .o_flipscreen(spr_flipscreen),
         .rec_peak(spr_rec_peak), .rec_drop(spr_rec_drop),
+        .fetch_max(spr_fetch_max), .rows_line_max(spr_rows_line_max),
         .spr_addr(spr_addr), .spr_q(spr_q),
         .ch_a_lo_addr(spr_a_lo_addr), .ch_a_lo_dout(spr_a_lo_dout), .ch_a_lo_req(spr_a_lo_req), .ch_a_lo_ready(spr_a_lo_ready),
         .ch_a_hi_addr(spr_a_hi_addr), .ch_a_hi_dout(spr_a_hi_dout), .ch_a_hi_req(spr_a_hi_req), .ch_a_hi_ready(spr_a_hi_ready),
@@ -365,6 +373,7 @@ module rf_video_pipe
             t_fet <= 0; t_fet_max <= 0; t_bld <= 0; t_bld_max <= 0;
             t_spr <= 0; t_spr_max <= 0; n_spr_miss <= 0;
             h_spr_max <= 0; h_late <= 0; h_rec_max <= 0; h_drop <= 0; warm <= 0;
+            h_fetch_max <= 0; h_rows_max <= 0; dbg_sfetch <= 0;
             dbg_lines <= 0; dbg_fetch <= 0; dbg_max <= 0; dbg_nz <= 0; dbg_spr <= 0; dbg_rec <= 0;
         end else begin
             if (mix_busy_d && !mix_busy) n_mix <= n_mix + 16'd1;
@@ -403,6 +412,12 @@ module rf_video_pipe
                 // capture (632 passes) drops appeared in ONE pass and late
                 // lines in two, which is exactly why these are held.
                 if (!held) warm <= warm + 4'd1;
+                if (held && spr_fetch_max     > h_fetch_max) h_fetch_max <= spr_fetch_max;
+                if (held && spr_rows_line_max > h_rows_max)  h_rows_max  <= spr_rows_line_max;
+                dbg_sfetch <= held
+                    ? {(spr_fetch_max     > h_fetch_max) ? spr_fetch_max     : h_fetch_max,
+                       (spr_rows_line_max > h_rows_max)  ? spr_rows_line_max : h_rows_max}
+                    : {spr_fetch_max, spr_rows_line_max};
                 if (held && spr_rec_peak > h_rec_max) h_rec_max <= spr_rec_peak;
                 if (held && t_spr_max    > h_spr_max) h_spr_max <= t_spr_max;
                 if (held) begin

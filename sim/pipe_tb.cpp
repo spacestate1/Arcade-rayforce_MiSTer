@@ -204,8 +204,8 @@ int main(int argc, char** argv) {
     // through frame_end (raster 0 of the next frame) so the diagnostics
     // printed are frame 3's -- the frame compared below -- not frame 2's
     for (int i = 0; i < 4; i++) step();
-    printf("dbg_lines %08x dbg_fetch %08x dbg_max %08x dbg_nz %08x dbg_spr %08x dbg_rec %08x  (mix:build fetch:pixnz maxfetch:maxbuild tilenz:pf:pal sprmax:late recs:dropped)\n",
-           t->dbg_lines, t->dbg_fetch, t->dbg_max, t->dbg_nz, t->dbg_spr, t->dbg_rec);
+    printf("dbg_lines %08x dbg_fetch %08x dbg_max %08x dbg_nz %08x dbg_spr %08x dbg_rec %08x dbg_sfetch %08x  (mix:build fetch:pixnz maxfetch:maxbuild tilenz:pf:pal sprmax:late recs:dropped)\n",
+           t->dbg_lines, t->dbg_fetch, t->dbg_max, t->dbg_nz, t->dbg_spr, t->dbg_rec, t->dbg_sfetch);
 
     FILE* o = fopen(outp, "wb");
     fprintf(o, "P6\n320 %d\n255\n", V_H);

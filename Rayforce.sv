@@ -1132,6 +1132,7 @@ wire [8:0] vid_hcnt, vid_vcnt;
 
 wire [23:0] game_rgb;
 wire [31:0] vid_dbg_lines, vid_dbg_fetch, vid_dbg_max, vid_dbg_nz, vid_dbg_spr, vid_dbg_rec;
+wire [31:0] vid_dbg_sfetch;
 
 rf_video_pipe vpipe
 (
@@ -1154,7 +1155,8 @@ rf_video_pipe vpipe
     .spr_b_hi_addr(spr_b_hi_addr), .spr_b_hi_dout(spr_b_hi_dout), .spr_b_hi_req(spr_b_hi_req), .spr_b_hi_ready(spr_b_hi_ready),
     .rgb(game_rgb),
     .dbg_lines(vid_dbg_lines), .dbg_fetch(vid_dbg_fetch), .dbg_max(vid_dbg_max),
-    .dbg_nz(vid_dbg_nz), .dbg_spr(vid_dbg_spr), .dbg_rec(vid_dbg_rec)
+    .dbg_nz(vid_dbg_nz), .dbg_spr(vid_dbg_spr), .dbg_rec(vid_dbg_rec),
+    .dbg_sfetch(vid_dbg_sfetch)
 );
 
 ///////////////////  SELF TEST PAGE + UART DEBUG  ////////////////
@@ -1197,6 +1199,7 @@ rf_selftest selftest
     .build_hex(`RF_BUILD_HEX),
     .vid_lines(vid_dbg_lines), .vid_fetch(vid_dbg_fetch), .vid_max(vid_dbg_max),
     .vid_nz(vid_dbg_nz), .vid_spr(vid_dbg_spr), .vid_rec(vid_dbg_rec),
+    .vid_sfetch(vid_dbg_sfetch),
     .snd_diag1({pivot_wr_cnt, snd_pc[15:0]}),
     .snd_diag2({snd_es_wr_cnt, 15'd0, snd_running}),
     .snd_diag3({smp_bist_sum[15:0], es_dbg_overrun[7:0], es_dbg_wqdrop[7:0]}),
