@@ -95,13 +95,44 @@ row and shows wrong graphics.
    What is left is not a buffering problem and no ring depth will fix it. A
    ring of 8 banks 7 spare lines plus the line's own budget -- 27,648 clocks,
    comfortably more than the 15,722 the worst single line needs -- so any one
-   heavy line is now covered. The residual is *runs* of consecutive heavy
-   lines, where the draw is simply too slow in aggregate: thirty lines
-   needing ~8,000 clocks each is 240,000 against the 103,680 those thirty
-   lines are allotted. That is a fetch-bandwidth ceiling in the sprite
-   graphics path, and the structural answer is to fetch faster -- more
-   outstanding SDRAM requests, or moving sprite graphics to DDR3 where they
-   would not contend with the playfields at all.
+   heavy line is now covered.
+
+   **The residual was caught in the act on 2026-08-29, and it is a latency
+   defect, not the fetch-bandwidth ceiling this section used to guess at.** A
+   screenshot from the board and MAME's own frame 2930 are the same instant of
+   attract, and they differ in **1,124 pixels, every one of them on rows
+   210-223** -- the last 14 lines of the frame. Rows 0-209 are pixel-identical.
+   A rendering bug does not stop at row 210, and the same frame renders
+   71,680/71,680 exact in the bench: the sprite draw ran out of time partway
+   down the frame and the run-ahead never recovered before the frame ended.
+
+   The cause is serialisation. The sprite engine runs two fetch buses taking
+   alternate records, each record needs two graphics planes, and all four went
+   through one `rf_spr_ch_share` onto SDRAM `ch4` -- where a sharer holds
+   exactly **one** burst outstanding. So four bursts were served strictly one
+   after another with nothing overlapped, and a line's draw time was
+   (bursts x round trip).
+
+   **A fix was attempted and the board rejected it.** One SDRAM channel per
+   fetch bus -- bus A on `ch4`, bus B on a new `ch7` -- so the two records in
+   flight could overlap instead of queueing. In the bench it doubled the
+   headroom (frame 2930 stays exact to a 135-clock sprite round trip instead
+   of 70). On hardware (build `29224005`, 2026-08-30) it moved the longest
+   sprite line only 8 %, 16,063 -> 14,809 clocks, and late lines kept
+   climbing.
+
+   **Why, and it is worth remembering:** `ch7` was placed *below* `ch4` in
+   the controller's fixed-priority scan, but the sprite draw consumes the two
+   buses in strict alternation, so the slower bus gates the pair. One
+   fairly-shared channel (a sharer round-robins its four ports) had become an
+   unfair pair. The bench missed it because it modelled both channels with
+   the *same* latency -- an assumption written into the bench, not measured
+   from the board. With the asymmetry modelled (`F3_SPS_LAT_B`), 90/180 --
+   the same 135 mean that renders exact when symmetric -- breaks the frame.
+
+   The arbiter now alternates between the two sprite channels. That is in the
+   tree and **has not been on a board**; until it has, the reading above
+   stands and this problem is open. The full trail is in HANDOFF.md.
 
    Note what is NOT wrong: `SPR REC : DROP` stays at zero, so the sprite list
    and the record store are keeping up — every sprite row the frame asked for
@@ -112,10 +143,15 @@ row and shows wrong graphics.
    lot is on screen at once. It has been present in every build so far
    (including the first release), and it went unnoticed because those
    counters only arrived recently and every earlier reading was taken
-   seconds after a core load, when they are still zero. The Verilator bench
-   that models a hardware-like fetch turnaround (`make -C sim pipe-lat`)
-   reports **zero** late lines, so the bench's latency model is optimistic
-   and wants recalibrating against these numbers before anything is changed.
+   seconds after a core load, when they are still zero.
+
+   The bench used to miss it too, for two reasons now fixed. Its `lat`
+   argument slows *every* SDRAM channel, so it broke the frame everywhere
+   instead of at the bottom where the board breaks it; `F3_SPS_LAT` slows the
+   sprite channel alone, which is the asymmetry the real controller has.
+   And the `SPRLINE : LATE` counter is peak-held from the 16th frame on, so a
+   3-frame bench run reads zero no matter what is happening -- `F3_FRAMES=20`
+   or more is required before that number means anything.
 
 2. **The ES5510 DSP is not emulated**, only its host port. Measured impact:
    the dry sampler mix correlates **0.95–0.99** with MAME's full output across
@@ -290,7 +326,11 @@ the SDRAM, the CPU write stream, every video RAM, the interrupt rates, the
 video pipeline's per-frame counters, the sprite engine's record and timing
 margins, and the sound board. It is **on by default** (`Self Test` in the OSD)
 and the same page is streamed over the DE10-Nano's UART, which is how the core
-is tested without anyone watching a monitor:
+is tested without anyone watching a monitor. Rows that prove the video
+pipeline *can* do something (fetch tiles, make non-black pixels) latch PASS
+once it has and read BUSY until then, so a blank frame never shows a false
+FAIL; the sprite engine's rows are peak-held and need the core left running a
+couple of minutes before they mean anything:
 
 ```sh
 python3 tools/rf_uart.py -t 12          # the page, over the serial port
@@ -319,6 +359,8 @@ The Verilator benches are the core's real regression suite and need no FPGA:
 make -C sim line-all pf-all mix-all      # video, against MAME's own frames
 make -C sim spr-all spr-line-all spr-ghost
 make -C sim pipe pipe-60 pipe-lat        # the raster pipeline under load
+make -C sim spr-lat                      # the sprite fetch path's headroom
+make -C sim spr-rec                      # the sprite record store vs the model
 make -C sim es5505 es5505-rw             # the sampler, incl. host reads
 ```
 
@@ -418,18 +460,32 @@ lag row is not hypothetical future work: MAME says lag 2 for both Gunlock and
 Elevator Action, the engine does 1, and the benches hide it because they hand
 the sprite RAM over from frame-2 themselves.
 
-So the architecture generalises; the coverage does not yet. The remaining
-architectural item is still the biggest one:
+So the architecture generalises; the coverage does not yet. The largest item
+left is the pivot layer — though not for either game this core runs:
 
-**The pivot (pixel) layer has to come back.** Ray Force never draws it — it
-only clears it, which this core proves on every run with a self-test row — so
-the layer's 64 KB of block RAM was spent on the sound board's RAM instead.
-That is the exception, not the rule: measured over 2,319 frames, **Elevator
-Action Returns writes the pivot RAM 131,072 times, 98,304 of them non-zero,
-touching all 256 pages**. Holding both that and the sound RAM needs 128 KB of
-block RAM, and the device is at 95 % of its M10K blocks, so one of them — or
-the 128 KB main RAM, the largest single block — has to move to SDRAM behind a
-cache. `rtl/rf_video_pivot.sv` itself is already written and verified.
+**The pivot (pixel) layer still has to come back for whichever F3 game draws
+on it.** Ray Force never does — it only clears it, which this core proves on
+every run with a self-test row — so the layer's 64 KB of block RAM was spent
+on the sound board's RAM instead, and what stands in for it is an 8 KB mirror.
+
+Elevator Action Returns looked like the counter-example and is not. A first
+probe counted 131,072 writes to the pivot RAM over 2,319 frames, 98,304 of
+them carrying non-zero data, touching all 256 pages — but sampling the RAM's
+live *contents* rather than the write stream tells a different story. Those
+writes all happen once, in a burst between frames 120 and 180, and **the most
+non-zero data ever live in the layer is one longword out of 16,384**,
+transient inside that burst; from frame 180 to frame 2,653 it is uniformly
+empty, exactly like Ray Force. MAME's frame dumps agree: `pivot_ram` is all
+zero in all nine of them. It is a boot-time fill-and-clear — a memory test —
+not a layer in use, and the game runs on the mirror.
+
+So the cost is deferred rather than paid: for a game that really draws the
+layer, holding both it and the sound RAM needs 128 KB of block RAM against a
+device at 95 % of its M10K blocks, so one of them — or the 128 KB main RAM,
+the largest single block — has to move to SDRAM behind a cache.
+`rtl/rf_video_pivot.sv` itself is already written and verified, and the
+`PIVOT WR:SND PC` self-test row is the watchdog that would say on hardware if
+either shipped game started using it.
 
 Encouragingly, the same measurement says **no F3 game examined uses sprite
 "trails"**, so the one sprite feature this core omits costs nothing.

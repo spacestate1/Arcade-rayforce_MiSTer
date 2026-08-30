@@ -1,6 +1,6 @@
 # Ray Force / Gunlock (Taito F3) — Handoff
 
-**Date**: 2026-08-28
+**Date**: 2026-08-29
 **Status**: Phase 2 (video) complete on hardware, sprites included. Phase 3
 (sound) stages 0-3 built and on the board: the sound 68000 runs the real
 driver (its chip writes match MAME's), the ES5505 is sample-exact against
@@ -16,15 +16,384 @@ the board: every page row PASS, and its Audio Ring capture correlates
 the board's sound is MAME's, sample for sample, for the first time.** The story of the night is under "Morning summary" and
 "Overnight plan" below; the video work of 2026-08-27 follows after that.
 
+> **Read this first (2026-08-30).** Build `29224005` is on the board. Two of
+> its three changes are confirmed working there (sticky self-test verdicts,
+> run-length sprite records); the third, `ch7`, **did not work** and the
+> reason is understood -- the two sprite channels were at fixed priority and
+> must alternate. The fix for that, and a correction to the `SPRLINE` row's
+> pass criterion, are in the tree and **not yet built**. See "The board's
+> verdict on ch7" immediately below.
+
 **The board is at 172.17.1.164** (not .175 — that address is dead).
+
+---
+
+## 2026-08-30 — The board's verdict on ch7: two of three fixes land, one is wrong
+
+Build `29224005` (timing met on every clock; worst +0.011 ns on the HDMI
+framework clock, clk_ram +1.056, clk_sys +1.648; ALM 91 %, M10K 541/553,
+LAB 99 %). `rec` stayed in MLAB after the widening -- checked in the Fitter
+RAM Summary, which was the one real risk in the run-length change.
+
+### What worked
+
+**Sticky self-test verdicts.** 63 page passes: 28 samples of
+`MAXFETCH:BUILD 00000111` and 27 of `TILE NZ:PF:PAL 00009FFF` -- the
+blank-frame values -- and **not one reported FAIL**. Those same values were
+FAILs before. Confirmed on hardware.
+
+**Run-length records.** `SPR REC : DROP 19750000`: **peak 6,517 records, 0
+dropped**, 53 % of the 12,288 store, on a scene busier than any dump. Before:
+10,714 rows, 87 %. Confirmed on hardware.
+
+### What did not: ch7
+
+    before (one channel)   SPRLINE : LATE  3EBF03D5   16,063 clk,   981 late (static)
+    after  (ch4 + ch7)     SPRLINE : LATE  39D9074E   14,809 clk, 1,870 late (climbing)
+
+Late lines went 935 -> 1,870 *within one 30 s capture*, and the longest line
+improved 8 % where the bench had predicted about 2x.
+
+**The cause is a mistake in the change itself.** `ch7` was placed immediately
+below `ch4` in the fixed-priority scan, on the reasoning that this left the
+sprite path's standing against the CPU and playfields unchanged. It does --
+but it does not leave the two sprite buses equal, and they must be. The draw
+consumes their records in **strict alternation** (`q_cs` in `rf_video_spr`),
+so a record from the fast bus cannot be drawn out of turn and the **slower
+bus gates the pair**. Bus B, served only when bus A is not asking, runs
+systematically behind. The single `rf_spr_ch_share` these replaced
+round-robins its four ports, so it was already fair: the change swapped a
+fair channel for an unfair pair.
+
+**The bench could not have caught it, because the bench asserted the thing
+that was false.** `pipe_tb` drove both sprite channels from one `lat_sps`.
+That symmetry was an assumption written into the bench, never measured from
+the controller. `F3_SPS_LAT_B` now models the two separately, and the
+asymmetry costs far more than the mean latency predicts (frame 2930):
+
+    A=90  B=90    exact          mean  90
+    A=90  B=135   exact          mean 112
+    A=90  B=180   67276/71680    mean 135  <- symmetric 135 is EXACT
+    A=60  B=240   62549/71680    mean 150  <- worse than 90/90, faster bus A
+
+The lesson generalises past this bug: a bench knob that collapses two
+distinct hardware quantities into one variable cannot fail on their
+difference. It is the same shape as the visarea that was hardcoded in
+`pipe_tb` and hid the sprite cull bug.
+
+### Fixed in the tree, not yet built
+
+1. **`rf_sdram.sv`: `ch4` and `ch7` alternate.** Whichever was served last
+   yields to the other; `spr_tog` carries it. Priority against every other
+   client is unchanged.
+2. **`rf_selftest.sv`: `SPRLINE : LATE` is judged on late lines.** The old
+   criterion also demanded the longest line be under one line's 3,456-clock
+   budget, so the board read `39D90000` -- 14,809 clocks with **zero late
+   lines** -- as FAIL. That is wrong by design: the ring of 8 exists so a
+   line can run over budget and still be drawn in full. The ceiling is now
+   the ring's own 27,648, which is the point past which no amount of banked
+   slack covers a line.
+
+### Does any of this apply to Elevator Action Returns?
+
+Measured, not assumed (`F3_VIS=f3 tools/f3_rec_count.py dump/ear`):
+
+| Change | Applies to EAR? |
+|---|---|
+| `ch7` + the fair arbiter | **Yes, fully.** The controller and the sprite fetch path are game-independent, and EAR's sprite load is comparable (264 sprites / 4,088 rows at peak in its dumps, against Ray Force's 305 / 4,808). |
+| Sticky self-test verdicts | **Yes.** EAR has blank frames of its own (598-600, 1798-1800, 2998-2999 carry no sprites at all), which is exactly what used to false-FAIL. |
+| `SPRLINE` ceiling of 27,648 | **Yes.** Both games run a 262-line raster, so the per-line budget and the ring are the same. |
+| Run-length records | **Correct for EAR, but worth nothing to it.** |
+
+That last row is the interesting one. **EAR's rows/run is 1.00 on every
+dumped frame but one** (3598, at 1.05): it does not y-shrink its sprites,
+where Ray Force shrinks heavily and reaches 3.25. So the compression that
+took Ray Force from 87 % to 53 % of the record store does nothing for
+Elevator Action.
+
+**Which makes EAR, not Ray Force, the game that now sits closest to
+overflowing the store.** Its dumps peak at 4,088 records with no compression
+available. If its real play is ~2x its dumps -- the ratio Ray Force showed
+between dump (4,808 rows) and board (10,714) -- EAR would land near 9,000 of
+12,288. Nothing has dropped a record yet in either game, and `SPR REC : DROP`
+is the watchdog, but if `NREC` is ever raised it will be Elevator Action that
+forces it, not Ray Force.
+
+One tooling note: `tools/f3_rec_count.py` follows `f3_render`'s `F3_VIS`, and
+its default is Ray Force's window. Counting an EAR dump without `F3_VIS=f3`
+silently drops the 8 lines outside it -- the same trap as the hardcoded
+sprite cull bounds.
+
+---
+
+## 2026-08-29 — The sprite fetch path: one SDRAM channel per bus (uncommitted)
+
+**This is the "SPRITE FETCH note" the comments in `Rayforce.sv`,
+`rtl/rf_sdram.sv`, `sim/pipe_top.sv` and `sim/Makefile` point at.**
+
+Known problem #1 — sprites missing from busy scenes — was caught in the act,
+and it is a **latency** defect in the sprite graphics fetch, not the
+fetch-bandwidth ceiling the README used to guess at.
+
+### What the board actually did
+
+Attract was left running on the board and screenshotted every six seconds
+(`screenshots/glitch_board/`); MAME was dumped over the same sequence
+(`screenshots/mame/`, `dump/rf_glitch/`), and frames 2928-2930 were then
+dumped in full so the bench could reproduce that instant. The board's
+`t062.png` and MAME's frame 2930 are the same moment of attract. Diffed
+pixel for pixel:
+
+    1,124 differing pixels out of 71,680
+    every one of them on rows 210-223 -- the last 14 lines of the visarea
+    rows 0-209 pixel-identical
+
+That shape *is* the diagnosis. A rendering bug does not stop at row 210. And
+the bench renders the same frame **71,680/71,680 exact**, so nothing about the
+picture is wrong: the sprite draw ran out of time partway down the frame and
+the run-ahead ring never recovered before the frame ended.
+
+Reproduce the diff:
+
+```sh
+python3 tools/rf_argb2png.py dump/f3_02930_frame.argb /tmp/mame_2930.png
+python3 - <<'EOF'
+from PIL import Image; import numpy as np
+b=np.array(Image.open('screenshots/glitch_board/t062.png').convert('RGB')).astype(int)
+m=np.array(Image.open('/tmp/mame_2930.png').convert('RGB')).astype(int)
+d=(np.abs(b-m).sum(axis=2)>0); r=d.sum(axis=1)
+print(d.sum(), 'px on rows', [i for i,v in enumerate(r) if v])
+EOF
+```
+
+### Why the draw was slow: four bursts, strictly serial
+
+The sprite engine runs two fetch buses (A and B) taking alternate records, and
+each record needs two graphics planes — four plane requests outstanding at
+once. All four shared SDRAM `ch4` through a single `rf_spr_ch_share`, and **a
+sharer holds exactly one burst outstanding**. So the four bursts were served
+one after another with nothing overlapped, and a line's draw time came to
+(bursts × round trip): linear in the fetch latency with a slope of one full
+round trip per burst, which is the signature of zero overlap.
+
+Note what was *not* wrong, and still is not: `SPR REC : DROP` stays at zero.
+The sprite list and the record store built every row the frame asked for. It
+is only the per-line fetch and draw that missed the deadline.
+
+### The bench had to be taught to model it — two separate fixes
+
+**1. `F3_SPS_LAT`.** `pipe_tb`'s positional `lat` argument slows *every*
+channel. On the board the playfield planes are `ch1`/`ch2`, the controller's
+top two priorities, while the sprite planes sat on `ch4`, fifth of six — so
+the sprite path waits several times longer than the playfields do. Slowing
+everything breaks the frame *everywhere* instead of at the bottom, where the
+board breaks it, so the old knob could not reproduce this at all.
+`F3_SPS_LAT` is the sprite channel's round trip on its own.
+
+**2. `F3_FRAMES`.** The pipe's own `SPRLINE : LATE` counter is peak-held and
+only begins accumulating once `warm` reaches 15 (`rf_video_pipe.sv:280,405`),
+i.e. from the 16th frame. **On the default 3-frame bench run it reads zero no
+matter what is happening.** Every "the bench reports zero late lines" reading
+before today was taken that way and meant nothing. `F3_FRAMES=20` or more is
+required. With the VRAM static, every extra frame is the same frame again,
+which is exactly what a steady-state timing reading wants.
+
+### The fix
+
+One SDRAM channel per fetch bus: bus A keeps `ch4`, bus B gets the new `ch7`.
+Two `rf_spr_ch_share` instances, two planes behind each, so the two records
+overlap instead of queueing. `ch7` sits immediately after `ch4` in the
+arbiter — the scan is now ch2, ch1, ch3, ch5, ch4, ch7, ch6 — so the sprite
+path's standing against the CPU (`ch3`) and the playfields (`ch1`/`ch2`) is
+unchanged. The one client that did move down is `ch6`, the ES5505 sample
+fetch, which now sits behind two sprite channels rather than one; it was
+already last and its occupancy is ~10-15 %, but that is untested on hardware.
+
+### Measured on frame 2930
+
+Sprite-channel round trip (`F3_SPS_LAT`, ram clocks) swept against the longest
+single sprite-line draw, the late-line count and the picture. `F3_FRAMES=20`
+throughout, so the peak-held late counter is actually accumulating:
+
+```
+    lat   longest     late   pixels-exact
+--- ONE shared channel (ch4 only, the committed wiring) ---
+     14      1351        0    71680/71680
+     40      3124        0    71680/71680
+     60      4495        0    71680/71680
+     70      5199        0    71680/71680
+     75      5551       40    71151/71680
+     90      6607      305    67325/71680
+    130      8549      670    62499/71680
+--- TWO channels (ch4 + ch7, the change under test) ---
+     14      1314        0    71680/71680
+     40      1973        0    71680/71680
+     60      2655        0    71680/71680
+     70      2996        0    71680/71680
+     75      3151        0    71680/71680
+     90      3678        0    71680/71680
+    130      5065        0    71680/71680
+    135      5227        0    71680/71680
+    140      5417       30    71376/71680
+```
+
+Three things to read out of it.
+
+**The draw time is linear in the fetch latency, and the slope halves.**
+Between lat 14 and lat 130 the longest line grows by 62.1 clocks per clock of
+round trip on one channel and 32.3 on two — a ratio of 1.92. A slope that is
+*proportional to the number of bursts* is the signature of zero overlap; that
+it halves is the change doing exactly and only what it was meant to do.
+
+**The headroom roughly doubles.** How much round trip frame 2930 survives
+before a single pixel goes wrong: **70 ram clocks with one channel, 135 with
+two** (ratio 1.93, matching the slope). That is where `spr-lat`'s `SPS_LAT`
+default of 130 comes from — comfortably inside what is verified, and not
+claiming margin that is not there.
+
+**The budget is not the deadline.** A line is allotted 3,456 clocks, but the
+ring of 8 banks seven spare lines on top of it, so the longest line can run far
+past 3,456 with nothing late and the picture still exact — one channel at lat
+70 draws a 5,199-clock line and is still 71,680/71,680. Late lines start when
+*runs* of heavy lines drain the ring, which is why the failure appears at the
+bottom of a frame rather than wherever the single worst line happens to be.
+
+### What this does NOT establish
+
+- **It has never been on a board.** No bitstream contains it. `./build.sh` was
+  launched at 16:05 on 2026-08-29 (stamp `29160539`) and was interrupted
+  during synthesis — `db/` holds the half-finished `quartus_map` output, there
+  is no `output_files/`, and the newest bitstream in `builds/`
+  (`Rayforce_29074637.rbf`) predates the change. The build must simply be
+  re-run; it starts with `rm -rf db incremental_db output_files`, so the stale
+  half-build costs nothing.
+- **The bench does not reproduce the board's failure geometry exactly.** The
+  board loses rows 210-223 and nothing else. The one-channel bench at lat 75
+  loses rows 169-174; at lat 80, rows 167-223. Same character — bottom-of-frame
+  sprite loss that spreads upward as the fetch slows — but the bench models a
+  constant round trip, where the real controller's is bursty and contended.
+  Do not read the bench's `lat` as a calibrated measurement of the board.
+- **`ch6` moved down a place** and the sound path has not been re-measured
+  against MAME since. The Audio Ring correlation (1.000) predates this change.
+- **Timing closure is unknown.** An extra channel widens the controller's
+  arbiter and adds a 64-bit output register; the qsf seed was also changed from
+  11 to 7 in the same edit, so a failed fit will need both untangled.
+
+### Regression status of the change, in the tree
+
+    make -C sim pipe-all     19/19 frames, 71,680/71,680 each   (unchanged)
+    make -C sim spr-lat      frame 2930 exact at SPS_LAT=130
+
+### The next step, precisely
+
+Re-run `./build.sh`, deploy, leave the core in attract for two minutes or more,
+and read `SPRLINE : LATE` off the self-test page. Before this change the same
+reading was `3EFA182E` / `42C910A7` — around 6,000 late lines with the longest
+line near 16,000 clocks. That row, not the bench, is what closes Known
+problem #1.
+
+---
+
+## 2026-08-29 — Two more findings from the board, both in the tree for the next build
+
+Read off build `29101900` running attract, 95 page passes over 45 s.
+
+### Self-test rows that failed on blank frames (fixed: `rf_selftest.sv`)
+
+`FETCH : PIX NZ`, `MAXFETCH:BUILD` and `TILE NZ:PF:PAL` are latched once per
+frame by `rf_video_pipe`, and a frame with no playfield on it -- the notice
+screen, a scene cut, the black frame between attract loops -- has zero tile
+fetches, zero non-zero tiles and no longest fetch, legitimately. The bench
+confirms it: frames 300 and 900 give `dbg_nz = 000000ff`. Judged frame by
+frame the rows said FAIL on every such frame (3 of the 95 passes), which is a
+diagnostic that teaches its reader to ignore red. HANDOFF had already called
+this "the known text-only-frame artefact" on 2026-08-27 and left it.
+
+Now the verdicts latch: PASS the first frame the condition holds, BUSY until
+then (the same idiom as the VIDEO RAM WRITES rows), cleared whenever the CPU
+is not running so a re-download starts the proof over. The *values* stay
+per-frame, so a blank frame still reads as blank on the page. MAXFETCH:BUILD
+also carries a real limit -- longest playfield build under the 3,456-clock
+line budget -- and that latches the other way: one frame over budget is FAIL
+from then on, peak-held like the sprite rows, because the page is read twice
+a second and a one-frame overrun would otherwise never be seen.
+
+Not benchable (no bench instantiates `rf_selftest`); Verilator lint clean.
+The check on the board: leave attract running through a scene cut and the
+three rows must stay PASS.
+
+### The sprite record store: 87 % full, then run-length records (implemented)
+
+`SPR REC : DROP` read `29DA0000` for the whole capture: **peak 10,714 rows in
+a frame, 0 dropped**, in a store of 12,288. `rf_video_spr.sv` said 12,288
+"leaves ~45 % over that peak" -- true of the 8,296 it was written against,
+and 13 % now. Overflow drops rows from the *last lines* of the frame, which is
+the same visible symptom as the sprite fetch running late, so this is worth
+knowing before blaming the fetch path for a missing bottom edge.
+
+**Growing the store was ruled out** -- it is 2 x 384 = 768 MLABs already
+(32 x 20-bit MLABs), 16,384 would be 1,024, the fitter has died once at ~960
+in this design, and M10K is no alternative (24 blocks a bank, ~26 free).
+
+**What was done instead: a record is now a RUN, not a row.** A sprite is one
+16 x 16 tile and the expand used to emit one record per source row landing in
+range. A y-shrunk sprite lands several of its 16 rows on the same screen
+line, and the draw lays those rows down back to back in the same order
+either way -- so the run of consecutive rows on one line is one record:
+
+    {sidx[9:0], srow_a[3:0], srow_b[3:0]}   18 bits, first and last source row
+
+Direction is implied (`b > a` under flip-y), 18 bits still fits the 20-bit
+MLAB word, so the store's cost is unchanged and every slot holds 1-16 rows.
+The draw issues one fetch per row stepping `a -> b`, and advances `fc` only
+on the last, so the two-bus alternation and the overwrite order are
+untouched -- which is why the picture is identical by construction and not
+by luck. One row-step macro (`RUN_STEP`) is shared by pass 1 and pass 2 so
+they cannot disagree about where a run starts and ends.
+
+How much it buys, measured with `tools/f3_rec_count.py` over every Ray
+Force dump (rows are what the old RTL stored, runs what the new one does):
+
+    ordinary play (2400, 2930, 3000, 5400)   1.0-1.3 rows a record
+    ship shrink (1797-1800)                  1.4-1.7
+    shrink-heavy (4198-4200, glitch/4242)    2.8-3.25   5680 rows -> 1750
+
+The board's 10,714 peak is nearly double the busiest dump, and the
+shrink-to-a-line effects are exactly the 3x regime, so the store should
+land somewhere between 30 % and 60 % instead of 87 %. `SPR REC` on the page
+now counts records; the first board reading after this build is the number
+to write down.
+
+Verified before it was built:
+
+    make -C sim spr-rec          1800: 638, 2930: 3755, 4200: 854 records --
+                                 each exactly the model's run count
+                                 (4200 was 2672 records before)
+    make -C sim spr-line-all     20/20 SPRITE LINES OK; frame 4200's one
+                                 used-flag diff (0 pixel diffs) unchanged
+    make -C sim spr-ghost        0 stale pixels, both frames
+    make -C sim pipe-all         19/19, 71,680/71,680 each
+    make -C sim spr-lat          frame 2930 exact at SPS_LAT=130
+    make -C sim ear-pipe-all     10/10; ear-spr-line-all as before
+
+`spr-rec` is new: it reads `rec_peak` out of the pipe bench's `dbg_rec` and
+compares it with the model's count for the sprite RAM the bench actually
+draws (frame f-2). A prepass that split or merged runs wrongly shows there
+before it shows on the page.
+
+This is in the same build as `ch7`. They are independent -- one is the store,
+the other the fetch -- and each has its own page row (`SPR REC` and
+`SPRLINE`), so they can still be told apart on the board.
 
 ---
 
 ## 2026-08-29 — Elevator Action Returns renders exactly (commit 603d965)
 
-All five sampled EAR frames now match MAME pixel for pixel across the **full
+All ten sampled EAR frames match MAME pixel for pixel across the **full
 232-line visarea** (74,240 px each), where before four matched partially over
-224 lines and one sat at 77.5 %. Ray Force is unaffected: `pipe-all` 19/19,
+224 lines and one sat at 77.5 %. Five of the ten (3000, 3600, 4200, 4800,
+5400) were dumped from MAME *after* these fixes and never used to develop
+them, so they are an out-of-sample check. Ray Force is unaffected: `pipe-all` 19/19,
 `mix-all` 19/19, `spr-ghost` OK, and `spr-line-all`'s one frame-4200 used-flag
 diff (0 pixel diffs) is byte-identical on the parent commit.
 
@@ -196,6 +565,14 @@ and `pipe-lat` (the bench that models a hardware-like fetch turnaround)
 reports zero late lines -- so the bench's latency model is optimistic
 compared with the real controller and should be recalibrated against these
 numbers first.
+
+> **Resolved 2026-08-29 — do not act on the paragraph above as written.** The
+> bench reported zero late lines for a reason that had nothing to do with its
+> latency model: the counter is peak-held from the 16th frame and the bench
+> ran three. Recalibrated (`F3_SPS_LAT` + `F3_FRAMES`), it reproduces the
+> failure, and the cause is serialisation on the shared sprite channel rather
+> than a bandwidth ceiling. See "The sprite fetch path" at the top of this
+> file.
 
 ### Elevator Action Returns: first boot on the core (2026-08-28, `28133520`)
 
@@ -885,6 +1262,11 @@ TILE NZ:PF:PAL    {fetches whose 16 pixels were not all zero,
                                                                      PASS if all three != 0
 ```
 
+*(Since 2026-08-29 those two verdicts, and MAXFETCH:BUILD's, are sticky:
+PASS latches the first frame the condition holds and BUSY is shown until
+then, so a blank frame no longer reads FAIL. The values stay per-frame. See
+"Self-test rows that failed on blank frames" at the top of this file.)*
+
 Reading them (sim reference for frame 1800: `2A8C58F7` and `2A8C9FFF`):
 
 | TILE NZ | PF | PAL | PIX NZ | it is                                             |
@@ -1261,7 +1643,9 @@ Two consequences:
 
 The two "FAIL"s in the text-only samples (notice screen: MAXFETCH:BUILD
 `00000111`, TILE NZ `0000`) are the known text-only-frame artefact, not
-faults; the rows assume a frame with playfields.
+faults; the rows assume a frame with playfields. *(Fixed 2026-08-29: those
+verdicts now latch, and a blank frame reads BUSY or the earlier PASS -- see
+the top of this file.)*
 
 ### The run-ahead sprite ring (build 3), and Phase 3 queued
 
@@ -1424,6 +1808,26 @@ BUILD           ddhhmmss           <- ddhhmmss of the compile. If this is not
 `WAIT` means a check has not started, `BUSY` means it is in progress (the ROM
 download, or the CPU still working through the boot writes). Anything still
 `BUSY` a few seconds after load is a real failure.
+
+That block is the early page; it has since grown to 28 rows. The two that
+matter for the sprite engine are **peak-held**, and reading them correctly is
+the difference between "clean" and "not looked":
+
+```
+SPRLINE : LATE  aaaabbbb     aaaa = longest single sprite line, in clocks
+                             bbbb = lines the mixer composed before the draw
+                                    had finished them  (the budget is 3456)
+SPR REC : DROP  aaaabbbb     aaaa = peak sprite RECORDS in a frame (a record
+                                    is a run of rows since 2026-08-29; before
+                                    that, a row -- do not compare across)
+                             bbbb = records dropped because the store was full
+```
+
+**Both halves start at zero and only begin accumulating after the core has
+been running a while**, so a reading taken seconds after a load says nothing.
+Leave the core in attract for two minutes or more before believing it. Every
+capture in this handoff before 2026-08-28 was taken too early, which is why
+the sprite overrun went unnoticed through two releases.
 
 ### Write-stream oracle (Phase 0/1)
 

@@ -392,6 +392,15 @@ stereo, MAME's mix) are the references.
    sprites (`rf_spr_ch_share` already does this shape). Adding channels is
    cleaner; the sprite work showed how sensitive ch4's latency is.
 
+   *Settled, and then some (2026-08-28/29).* Channels were added rather than
+   shared: ch5 for the sound CPU's program fetch, ch6 for the ES5505 sample
+   reads, and — after the sprite overrun was traced to serialisation rather
+   than bandwidth — **ch7 for the sprite engine's second fetch bus**, so each
+   bus has a channel of its own instead of both queueing behind one sharer.
+   The controller now scans ch2, ch1, ch3, ch5, ch4, ch7, ch6. "How sensitive
+   ch4's latency is" turned out to be the understatement of the phase: see
+   "The sprite fetch path" in HANDOFF.md.
+
 **Stages -- each verified before the next, the way the video was**
 
 - [x] **Stage 0: oracle** (2026-08-27: `oracle_en_dump.lua`, `es5505_model.py`, `es5505_compare.py`; model vs MAME mix correlation 0.95-0.99). Extend `tools/oracle_f3dump.lua` (or a sibling)
