@@ -55,9 +55,16 @@
 //  exactly (dy8/dx8), which Ray Force needs -- it shrinks sprites to a line.
 //
 //  Storage -- sized for the MLAB budget, which is the binding one. A record
-//  is only {sprite index, source row} (14 bits): the per-sprite data (x, x
-//  scale, code, colour, flipx) is stored ONCE, in sl_d, and looked up by the
-//  draw. The list is split by consumer: sl_y (ty, y scale, flipy) is read
+//  is a RUN: {sprite index, first source row, last source row} (18 bits),
+//  the consecutive source rows of one sprite that land on the same screen
+//  line. A y-shrunk sprite puts several of its 16 rows on one line, and the
+//  draw lays them down back to back in the same order either way, so one
+//  record for the run costs no exactness and no draw time -- only store.
+//  Measured over every Ray Force dump (2026-08-29): 1.0-1.3 rows a record in
+//  ordinary play, 2.8-3.25 in the shrink-heavy scenes (frame 4200: 2960 rows
+//  -> 1046 records), and it is the shrink scenes that set the board's peak.
+//  The per-sprite data (x, x scale, code, colour, flipx) is stored ONCE, in
+//  sl_d, and looked up by the draw. The list is split by consumer: sl_y (ty, y scale, flipy) is read
 //  only by the expand, in the same prepass that wrote it, so it is
 //  single-banked; sl_d is read by the draw a frame later, so it is
 //  double-banked like the record store. The buckets are built by counting
@@ -180,24 +187,43 @@ module rf_video_spr
     // for 8192 records per bank at the MLAB cost of 4096 linked ones.
     //
     // Overflow: the prefix sum clamps each line's run to what is left, in
-    // line order, so a frame past NREC rows loses rows from its last lines
-    // and reports them on the self-test page (rec_drop). The busiest dumped
-    // frame needs 3144 -- but the BOARD peaked at 8296 in a five-minute
-    // attract capture and dropped 104 rows once in 632 page passes, which
-    // 8192 could not hold. 12288 leaves ~45 % over that peak (2026-08-28);
-    // it is MLABs, not M10Ks, so it trades against the other MLAB users
-    // rather than against the video RAMs.
+    // line order, so a frame past NREC rows loses rows from its LAST lines
+    // and reports them on the self-test page (rec_drop). That is the same
+    // visible symptom as the sprite fetch running late -- sprites missing
+    // from the bottom of the frame -- so when the bottom goes, read
+    // SPR REC : DROP before blaming the fetch path.
+    //
+    // Sizing history. The busiest dumped frame needs 3144 rows; the BOARD
+    // peaked at 8296 in a five-minute attract capture (2026-08-28) and
+    // dropped 104 rows once in 632 page passes, which 8192 could not hold.
+    // 12288 was chosen as ~45 % over that. It is not: a longer run on
+    // 2026-08-29 (build 29101900) peaked at 10714 rows, 87 % of the store,
+    // with 0 dropped -- 13 % margin, not 45 %. Whether the game ever asks
+    // for more than 12288 is unknown; nothing has yet.
+    //
+    // Growing it is not free to try. An MLAB is 32 x 20 bits, so this store
+    // is 2 x 384 = 768 MLABs at 18 bits a record (two bits of every word
+    // unused, and no narrower packing fits: 64 x 10 mode is too narrow).
+    // 16384 would be 1024. Run-length records (2026-08-29) are the cheaper
+    // answer: the same 12288 slots hold 1.0-3.25x the rows they used to. The fitter has already died once at ~960 MLABs
+    // in this design (HANDOFF, "The BRAM wall had moved into the MLABs")
+    // and no fit report since B15 records the real headroom, so raising
+    // NREC is a 35-minute build to find out, and it should be its own
+    // build rather than confound one that is testing something else.
+    // M10K is not an alternative either: 24 blocks a bank against ~26 free.
     localparam int NREC = 12288;        // per bank
     localparam int RW   = 14;           // record index width
     localparam int RW1  = RW + 1;       // the prefix sum reaches NREC
-    // record: {sidx[9:0], srow[3:0]}
-    (* ramstyle = "MLAB, no_rw_check" *) logic [13:0]   rec [0:1][0:NREC-1];
+    // record: {sidx[9:0], srow_a[3:0], srow_b[3:0]} -- the run's first and
+    // last source row. The draw steps from a toward b, so the direction
+    // (rows walk 15 -> 0, and flipy inverts the source row) is implied.
+    (* ramstyle = "MLAB, no_rw_check" *) logic [17:0]   rec [0:1][0:NREC-1];
     // per line, prepass scratch: rows counted (pass 1), then the fill
     // pointer (pass 2); and the clamped end of the line's run
     (* ramstyle = "MLAB, no_rw_check" *) logic [RW-1:0] cnt [0:255];
     (* ramstyle = "MLAB, no_rw_check" *) logic [RW-1:0] lim [0:255];
-    logic [15:0] rows_tot;              // rows the frame asked for
-    logic [15:0] drop_cnt;              // rows refused (store full)
+    logic [15:0] rows_tot;              // records the frame asked for
+    logic [15:0] drop_cnt;              // records refused (store full)
     logic        wb, rb;                // write (prepass) / read (draw) bank
     logic  [4:0] penmask_r;
     logic        flip_r;
@@ -230,6 +256,13 @@ module rf_video_spr
     logic  [7:0] sum_y;
     logic [RW:0] sum_acc;               // one bit wider: reaches NREC
     logic [RW-1:0] c_rd, f_rd, l_rd;    // MLAB reads, taken the cycle before use
+    // the run being built (r_*) and the one being emitted (e_*). A row that
+    // lands on a new line closes the open run into e_* and opens the next
+    // in r_* in the same cycle, so the two must be separate registers.
+    logic        r_open;
+    logic  [7:0] r_dy, e_dy;
+    logic  [3:0] r_a, r_b, e_a, e_b;
+    logic        ret_end;               // after the emit: sprite end, not next row
 
     wire signed [24:0] ex_dy   = ex_dy8 >>> 8;
     wire               ex_inr  = (ex_dy >= $signed({16'd0, VY0})) &&
@@ -276,9 +309,17 @@ module rf_video_spr
     // fields are good from TWO cycles after fc changes (fc_ok); every use
     // below waits for that.
     logic [RW-1:0] fc, fe;
-    wire [13:0]        rc_w    = rec[rb][fc];
-    wire        [9:0]  rc_sidx = rc_w[13:4];
-    wire        [3:0]  rc_srow = rc_w[3:0];
+    wire [17:0]        rc_w    = rec[rb][fc];
+    wire        [9:0]  rc_sidx = rc_w[17:8];
+    wire        [3:0]  rc_a    = rc_w[7:4];      // the run's first source row
+    wire        [3:0]  rc_b    = rc_w[3:0];      // ... and its last
+    // partway through the record at fc: the next row of it to issue. fc
+    // only advances on the run's last row, so fc_ok stays settled between
+    // rows and the rows of a run issue on consecutive free slots.
+    logic              ir_open;
+    logic        [3:0] ir_row;
+    wire        [3:0]  is_row  = ir_open ? ir_row : rc_a;
+    wire        [3:0]  is_next = (rc_b > rc_a) ? is_row + 4'd1 : is_row - 4'd1;
     logic       [9:0]  sidx_r;
     always_ff @(posedge clk) sidx_r <= rc_sidx;
     wire [50:0]        sd_w    = sl_d[rb][sidx_r];
@@ -412,24 +453,54 @@ module rf_video_spr
     // ================= PREPASS FSM (writes bank wb) =================
     typedef enum logic [3:0] {
         P_IDLE, P_WALK,
-        P_C0, P_CRD, P_CWR,             // pass 1: count rows per line
-        P_SRD, P_SWR,                   // prefix sum -> runs
-        P_E0, P_ERD, P_EWR              // pass 2: place rows
+        P_C0, P_CROW, P_CRD, P_CWR, P_CEND,   // pass 1: count records per line
+        P_SRD, P_SWR,                         // prefix sum -> runs
+        P_E0, P_EROW, P_ERD, P_EWR, P_EEND    // pass 2: place records
     } pst_t;
     pst_t pst;
     assign prepass_busy = (pst != P_IDLE);
 
-    // advance the row walk. ROW is the state that handles the next row of
-    // this sprite, SPR the one that loads the next sprite -- written out
-    // explicitly, every time (a "stay" that lands in the wrong state was
-    // the bug the spr-line bench caught in the linked-list version).
-    `define SPR_ADV(ROW, SPR) \
-        if (ex_yy == 5'd0) begin ex_i <= ex_i + 11'd1; pst <= SPR; end \
-        else begin ex_dy8 <= ex_dy8 - $signed({16'd0, ex_sy}); \
-                   ex_yy  <= ex_yy - 5'd1; pst <= ROW; end
+    // One row of the walk, shared by both passes so they cannot disagree
+    // about where a run starts and ends (pass 1 counts what pass 2 places).
+    // A row in range on the open run's line extends it; any other row
+    // closes the open run into e_* (RDST emits it) and, if in range, opens
+    // a new one. The row is advanced here either way; the emit states use
+    // e_* only, and come back to ROWST for the next row or ENDST after the
+    // last. Every next state is written out explicitly (a "stay" that
+    // landed in the wrong state was the bug the spr-line bench caught in
+    // the linked-list version).
+    `define RUN_STEP(ROWST, RDST, ENDST) \
+        begin \
+            if (ex_inr && r_open && ex_dyb == r_dy) begin \
+                r_b <= ex_srow; \
+                pst <= (ex_yy == 5'd0) ? ENDST : ROWST; \
+            end else begin \
+                e_dy <= r_dy; e_a <= r_a; e_b <= r_b; \
+                r_open <= ex_inr; r_dy <= ex_dyb; r_a <= ex_srow; r_b <= ex_srow; \
+                ret_end <= (ex_yy == 5'd0); \
+                pst <= r_open ? RDST : (ex_yy == 5'd0) ? ENDST : ROWST; \
+            end \
+            if (ex_yy != 5'd0) begin \
+                ex_dy8 <= ex_dy8 - $signed({16'd0, ex_sy}); \
+                ex_yy  <= ex_yy - 5'd1; \
+            end \
+        end
+    // the sprite's last row has been walked: emit the run still open, then
+    // move to the next sprite
+    `define RUN_END(RDST, SPRST) \
+        begin \
+            if (r_open) begin \
+                e_dy <= r_dy; e_a <= r_a; e_b <= r_b; \
+                r_open <= 1'b0; ret_end <= 1'b1; \
+                pst <= RDST; \
+            end else begin \
+                ex_i <= ex_i + 11'd1; \
+                pst  <= SPRST; \
+            end \
+        end
     // load sprite ex_i's expand state (its 16 rows walked 15 -> 0)
     `define SPR_LOAD_EX \
-        begin ex_sy <= sly_sy; ex_fy <= sly_fy; ex_yy <= 5'd15; \
+        begin ex_sy <= sly_sy; ex_fy <= sly_fy; ex_yy <= 5'd15; r_open <= 1'b0; \
               ex_dy8 <= $signed(sly_ty) + (flip_r ? 25'sd0 : 25'sd255) \
                       + $signed({16'd0, ({sly_sy, 4'd0} - {4'd0, sly_sy})}); end
 
@@ -476,7 +547,7 @@ module rf_video_spr
                 end
             end
 
-            // ---- pass 1: count
+            // ---- pass 1: count records per line
             P_C0: begin
                 if (ex_i >= nspr) begin
                     sum_y   <= 8'd0;
@@ -484,22 +555,20 @@ module rf_video_spr
                     pst     <= P_SRD;
                 end else begin
                     `SPR_LOAD_EX
-                    pst <= P_CRD;
+                    pst <= P_CROW;
                 end
             end
+            P_CROW: `RUN_STEP(P_CROW, P_CRD, P_CEND)
             P_CRD: begin
-                if (ex_inr) begin
-                    c_rd <= cnt[ex_dyb];
-                    pst  <= P_CWR;
-                end else begin
-                    `SPR_ADV(P_CRD, P_C0)
-                end
+                c_rd <= cnt[e_dy];
+                pst  <= P_CWR;
             end
             P_CWR: begin
-                cnt[ex_dyb] <= c_rd + 1'b1;
+                cnt[e_dy] <= c_rd + 1'b1;
                 if (rows_tot != 16'hFFFF) rows_tot <= rows_tot + 16'd1;
-                `SPR_ADV(P_CRD, P_C0)
+                pst <= ret_end ? P_CEND : P_CROW;
             end
+            P_CEND: `RUN_END(P_CRD, P_C0)
 
             // ---- prefix sum: line y gets [sum_acc, sum_acc + cap); cnt[y]
             // becomes its fill pointer, lim[y] its end. Ends are 13-bit
@@ -526,43 +595,42 @@ module rf_video_spr
                 end
             end
 
-            // ---- pass 2: place
+            // ---- pass 2: place records
             P_E0: begin
                 if (ex_i >= nspr) begin
                     // what the frame asked for and what was refused, for
-                    // the self-test page: refused rows come off the END of
-                    // the run order, i.e. the sprites drawn on top
+                    // the self-test page: refused records come off the END
+                    // of the run order, i.e. the sprites drawn on top
                     rec_peak <= rows_tot;
                     rec_drop <= drop_cnt;
                     pst <= P_IDLE;
                 end else begin
                     `SPR_LOAD_EX
-                    pst <= P_ERD;
+                    pst <= P_EROW;
                 end
             end
+            P_EROW: `RUN_STEP(P_EROW, P_ERD, P_EEND)
             P_ERD: begin
-                if (ex_inr) begin
-                    f_rd <= cnt[ex_dyb];
-                    l_rd <= lim[ex_dyb];
-                    pst  <= P_EWR;
-                end else begin
-                    `SPR_ADV(P_ERD, P_E0)
-                end
+                f_rd <= cnt[e_dy];
+                l_rd <= lim[e_dy];
+                pst  <= P_EWR;
             end
             P_EWR: begin
                 if (f_rd != l_rd) begin
-                    rec[wb][f_rd] <= {ex_i[9:0], ex_srow};
-                    cnt[ex_dyb]   <= f_rd + 1'b1;
+                    rec[wb][f_rd] <= {ex_i[9:0], e_a, e_b};
+                    cnt[e_dy]     <= f_rd + 1'b1;
                 end else if (drop_cnt != 16'hFFFF) begin
                     drop_cnt <= drop_cnt + 16'd1;
                 end
-                `SPR_ADV(P_ERD, P_E0)
+                pst <= ret_end ? P_EEND : P_EROW;
             end
+            P_EEND: `RUN_END(P_ERD, P_E0)
 
             default: pst <= P_IDLE;
         endcase
     end
-    `undef SPR_ADV
+    `undef RUN_STEP
+    `undef RUN_END
     `undef SPR_LOAD_EX
 
     // ================= DRAW FSM (reads bank rb) =================
@@ -592,7 +660,7 @@ module rf_video_spr
 
         if (reset) begin
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
-            active <= 1'b0; nxt <= 9'd0; par <= 1'b0;
+            active <= 1'b0; nxt <= 9'd0; par <= 1'b0; ir_open <= 1'b0;
             for (int b = 0; b < NB; b++) begin
                 span_lo[b] <= 9'd511; span_hi[b] <= 9'd0;      // empty
             end
@@ -605,7 +673,7 @@ module rf_video_spr
             // simply not captured -- q_busy is cleared -- and the bus stays
             // busy until it lands, which the issue rule waits for.
             dst <= D_IDLE; q_busy <= 2'b00; q_ready <= 2'b00; cur <= 1'b0;
-            active <= 1'b1; nxt <= 9'd0;
+            active <= 1'b1; nxt <= 9'd0; ir_open <= 1'b0;
         end else case (dst)
             D_IDLE: if (can_draw) begin
                 dr_line <= nxt[7:0];
@@ -643,15 +711,17 @@ module rf_video_spr
                     fc    <= bt_q[RW-1:0];
                     fe    <= bt_q[2*RW-1:RW];
                     fc_ok <= 1'b0;
+                    ir_open <= 1'b0;
                     dst   <= D_RUN;
                 end
             end
 
             D_RUN: begin
-                // ---- issue the next record into the free slot
+                // ---- issue the next row of the record at fc into the free
+                // slot; fc advances on the run's last row only
                 if (fc != fe && fc_ok && !q_busy[q_is] && !gfx_busy[q_is]) begin
                     gfx_code[q_is] <= sd_code;
-                    gfx_row[q_is]  <= rc_srow;
+                    gfx_row[q_is]  <= is_row;
                     gfx_req[q_is]  <= 1'b1;
                     q_busy[q_is]   <= 1'b1;
                     q_ready[q_is]  <= 1'b0;
@@ -659,8 +729,14 @@ module rf_video_spr
                     q_sx[q_is]     <= sd_sx;
                     q_col[q_is]    <= sd_col;
                     q_fx[q_is]     <= sd_fx;
-                    fc    <= fc + 1'b1;
-                    fc_ok <= 1'b0;
+                    if (is_row == rc_b) begin
+                        fc      <= fc + 1'b1;
+                        fc_ok   <= 1'b0;
+                        ir_open <= 1'b0;
+                    end else begin
+                        ir_open <= 1'b1;
+                        ir_row  <= is_next;
+                    end
                     q_is  <= ~q_is;
                 end
 
