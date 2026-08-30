@@ -353,6 +353,25 @@ module rf_video_spr
     logic [1:0]        q_fx;
     logic              q_is, q_cs;
     logic              cur;              // a record is being drawn
+
+    // ---- blank-row skip --------------------------------------------------
+    // A fetched row whose 16 pens are all zero after the pen mask draws
+    // NOTHING: every write below is guarded by (dr_vis && dr_pen != 0). It
+    // still costs the full 17-cycle draw loop, and in a dense scene most of
+    // what stacks up on a line is sprite edges, which are transparent.
+    //
+    // Skipping it is exactly equivalent -- not an approximation. The board
+    // needs it: SPRFETCH:ROWMAX on build 30101648 read 784 rows on the worst
+    // line at 17.8 clocks each, i.e. the draw loop IS the floor and 784 x 17
+    // = 13328 clocks against a 3456 budget. No fetch or priority change can
+    // touch that; the only ways down are fewer rows or fewer cycles a row,
+    // and this is the free half of the first.
+    logic q_any;
+    always_comb begin
+        q_any = 1'b0;
+        for (int k = 0; k < 16; k++)
+            if ((q_pix[q_cs][6*k +: 5] & penmask_r) != 5'd0) q_any = 1'b1;
+    end
     logic              fc_ok;            // fc's two-deep lookup has settled
 
     // ---- sprite gfx fetch, two buses ------------------------------------
@@ -800,7 +819,9 @@ module rf_video_spr
                         q_busy[q_cs]  <= 1'b0;
                         q_ready[q_cs] <= 1'b0;
                         q_cs <= ~q_cs;
-                        cur  <= 1'b1;
+                        // an all-transparent row writes nothing, so take the
+                        // next record instead of spending 17 cycles on it
+                        cur  <= q_any;
                     end else if (!q_busy[q_cs] && fc == fe) begin
                         used_bank[dr_line[NBW-1:0]] <= dr_used;
                         span_lo[dr_line[NBW-1:0]] <= cur_lo;
