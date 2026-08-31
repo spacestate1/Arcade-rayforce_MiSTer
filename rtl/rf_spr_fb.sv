@@ -140,7 +140,14 @@ module rf_spr_fb
     // The window is refilled from line 0 at frame_start, and vblank is 31
     // lines long, so the first NRB lines are fetched with the mixer nowhere
     // near them.
-    localparam int NRB = 4;
+    // 8 deep, was 4. With verification a line costs its beats plus a CRC
+    // round trip, and on the real contended port that approaches a raster
+    // line -- a 4-line window then has no slack, and lines arrive DURING
+    // their own display: left part empty, sprite starting partway across,
+    // which is exactly the split the screen showed while only ~2 lines a
+    // frame counted as full misses. Seven lines of run-ahead absorbs the
+    // jitter. 8 x 512 x 16 is 8 M10K of the 16 the framebuffer freed.
+    localparam int NRB = 8;
     typedef enum logic [2:0] { R_IDLE, R_REQ, R_WAIT, R_CRC, R_VERIFY, R_DRAIN } rst_t;
     rst_t rst;
     logic  [6:0] r_word;            // words requested
@@ -151,12 +158,12 @@ module rf_spr_fb
     logic  [7:0] r_rem;
     logic  [7:0] r_got;             // words returned; see the >= test below
     logic  [8:0] nf;                // next line to fetch (256 = done)
-    logic  [1:0] r_fill;            // nf % NRB
+    logic  [2:0] r_fill;            // nf % NRB
     logic  [7:0] buf_line [0:NRB-1];
     logic [NRB-1:0] buf_ok;
 
     (* ramstyle = "M10K" *) logic [15:0] lbuf [0:NRB-1][0:511];
-    wire  [1:0] rd_sel = rd_line[1:0];
+    wire  [2:0] rd_sel = rd_line[2:0];
     wire        rd_hit = buf_ok[rd_sel] && (buf_line[rd_sel] == rd_line);
     logic [15:0] rd_q;
     logic        rd_hit_q;
@@ -298,7 +305,7 @@ module rf_spr_fb
         if (reset) begin
             rw_tog <= 1'b1;
             wst <= W_IDLE; rst <= R_IDLE;
-            r_fill <= 2'd0; buf_ok <= '0; nf <= 9'd0;
+            r_fill <= 3'd0; buf_ok <= '0; nf <= 9'd0;
             for (int b = 0; b < NRB; b++) buf_line[b] <= 8'd0;
             w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 8'd0; r_to <= 12'd0;
         end else begin
@@ -343,7 +350,7 @@ module rf_spr_fb
             // Walk forward: keep the window [rd_line, rd_line+NRB) filled.
             case (rst)
                 R_IDLE: if (!nf[8] && (nf < {1'b0, rd_line} + NRB)) begin
-                    r_fill <= nf[1:0];
+                    r_fill <= nf[2:0];
                     r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; r_idle <= 10'd0;
                     r_sum <= 64'd0; r_try <= 2'd0;
                     rst <= R_REQ;

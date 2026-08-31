@@ -38,7 +38,7 @@ rm -f "$LOG"
 # (other apps holding RAM), the global OOM killer picks the build, not them
 # (this systemd is too old for -p OOMScoreAdjust).
 systemd-run --user --scope --quiet \
-    -p MemoryHigh=11G -p MemoryMax=11G -p CPUWeight=100 \
+    -p MemoryHigh=8G -p MemoryMax=9G -p CPUWeight=80 \
     choom -n 1000 -- nice -n 5 quartus_sh --flow compile Rayforce > "$LOG" 2>&1 &
 BUILD_PID=$!
 
