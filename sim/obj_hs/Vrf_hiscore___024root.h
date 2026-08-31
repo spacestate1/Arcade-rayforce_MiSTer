@@ -33,7 +33,6 @@ class alignas(VL_CACHE_LINE_BYTES) Vrf_hiscore___024root final {
     CData/*7:0*/ rf_hiscore__DOT__sh_idx;
     CData/*7:0*/ rf_hiscore__DOT__sh_byte;
     CData/*2:0*/ rf_hiscore__DOT__hst;
-    CData/*0:0*/ rf_hiscore__DOT__injected;
     CData/*0:0*/ rf_hiscore__DOT__poll_done;
     CData/*0:0*/ rf_hiscore__DOT__capturing;
     CData/*0:0*/ rf_hiscore__DOT__sh_ok;
@@ -65,6 +64,7 @@ class alignas(VL_CACHE_LINE_BYTES) Vrf_hiscore___024root final {
     VL_IN16(hs_q,15,0);
     SData/*15:0*/ rf_hiscore__DOT__ld_pd;
     SData/*15:0*/ rf_hiscore__DOT__sv_q;
+    SData/*9:0*/ rf_hiscore__DOT__inj_left;
     SData/*15:0*/ rf_hiscore__DOT__cap_lo;
     SData/*15:0*/ __Vtrigprevexpr___TOP__ld_data__0;
     SData/*15:0*/ __Vtrigprevexpr___TOP__hs_q__0;

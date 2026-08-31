@@ -196,7 +196,10 @@ module rf_video_spr
     // ---- stored sprite list, split by consumer ---------------------------
     // sl_y: {ty[17:0], sy[8:0], fy}                 -- the expand (prepass)
     // sl_d: {tx[17:0], sx[8:0], code[14:0], color[7:0], fx} -- the draw
-    (* ramstyle = "MLAB, no_rw_check" *) logic [27:0] sl_y [0:NSPR-1];
+    // M10K, not MLAB: its read is registered (sly_q), so it does not need
+    // the async read the MLAB arrays below are chosen for. 1024 x 28 bits is
+    // 3 M10Ks against 64 MLABs, and M10K is the resource with headroom.
+    (* ramstyle = "M10K, no_rw_check" *) logic [27:0] sl_y [0:NSPR-1];
     (* ramstyle = "MLAB, no_rw_check" *) logic [50:0] sl_d [0:1][0:NSPR-1];
     logic [10:0] nspr;
 
@@ -233,7 +236,34 @@ module rf_video_spr
     // NREC is a 35-minute build to find out, and it should be its own
     // build rather than confound one that is testing something else.
     // M10K is not an alternative either: 24 blocks a bank against ~26 free.
-    localparam int NREC = 12288;        // per bank
+    //
+    // 12288 -> 10240, 2026-08-31, because THE BINDING RESOURCE MOVED. The
+    // note above reasons about MLAB count; the fitter now dies on ALMs. A
+    // build on this date failed outright at 41,932 / 41,910 ALMs (100 %),
+    // and the fit report puts THIS STORE at 7,996 of them -- 19 % of the
+    // whole device, the single largest block in the design. 768 MLABs at
+    // ~10.4 ALMs each is what an 18-bit record in a 32x20 MLAB costs.
+    //
+    // The old 10714 peak that justified 12288 was measured in ROWS, before
+    // run-length records landed the same day (2026-08-29); it cannot be
+    // compared against a record count. Re-measured on the board with the
+    // record encoding: Ray Force peaks 4462 (SPR REC 116E, 0 dropped) and
+    // Elevator Action Returns 8645 (21C5, 0 dropped), the higher of the
+    // two. 10240 keeps 18 % over the worst case actually observed and
+    // returns ~1300 ALMs, which is what makes the design fit again.
+    //
+    // If a game ever does exceed this, it is not silent: the prefix sum
+    // clamps in line order, so rows go missing from the BOTTOM of the frame
+    // and rec_drop counts them on the self-test page. Read SPR REC : DROP
+    // before blaming anything else.
+    // Back to 10240 after 9728 was tried and the fit got WORSE (4321 LABs
+    // against 4201), which is the clearest evidence that at this utilisation
+    // the fitter's variance is bigger than these reductions -- shrinking the
+    // store by 512 records cannot cost 120 LABs. 10240 is the size with a
+    // reason behind it: 18 % over EAR's measured 8645-record peak, where
+    // 9728 left only 12.5 %. Overflow drops rows from the BOTTOM of the
+    // frame and rec_drop counts them on the page, so it fails loudly.
+    localparam int NREC = 10240;        // per bank
     localparam int RW   = 14;           // record index width
     localparam int RW1  = RW + 1;       // the prefix sum reaches NREC
     // record: {sidx[9:0], srow_a[3:0], srow_b[3:0]} -- the run's first and
@@ -296,10 +326,16 @@ module rf_video_spr
     // infer an MLAB from N separately-sliced reads of the same array (the
     // build died on exactly that -- "can't infer memory for variable 'slist'"),
     // this is the canonical pattern it accepts.
-    wire [27:0]        sly_w  = sl_y[ex_i];
-    wire signed [17:0] sly_ty = sly_w[27:10];
-    wire        [8:0]  sly_sy = sly_w[9:1];
-    wire               sly_fy = sly_w[0];
+    // sl_y is read through a REGISTER, which is what lets it live in an M10K
+    // instead of costing 64 MLABs -- and an MLAB is a whole LAB, the resource
+    // the fitter actually runs out of. The read is unconditional, so sly_q
+    // holds sl_y[ex_i] one clock after ex_i settles; P_C0W / P_E0W are that
+    // clock. Only SPR_LOAD_EX consumes these, and only from those states.
+    logic [27:0]       sly_q;
+    always_ff @(posedge clk) sly_q <= sl_y[ex_i];
+    wire signed [17:0] sly_ty = sly_q[27:10];
+    wire        [8:0]  sly_sy = sly_q[9:1];
+    wire               sly_fy = sly_q[0];
 
     // the prefix sum's clamp: what is left of the store for this line
     wire [RW:0]   sum_left = (sum_acc >= RW1'(NREC)) ? '0 : RW1'(NREC) - sum_acc;
@@ -516,9 +552,14 @@ module rf_video_spr
     // ================= PREPASS FSM (writes bank wb) =================
     typedef enum logic [3:0] {
         P_IDLE, P_WALK,
-        P_C0, P_CROW, P_CRD, P_CWR, P_CEND,   // pass 1: count records per line
+        // P_C0W / P_E0W are one dead cycle each, waiting for sly_q to catch
+        // up with ex_i now that sl_y is an M10K with a REGISTERED read
+        // rather than an async MLAB. Two per sprite, so 2048 clocks a frame
+        // against ~905,000 -- unmeasurable -- and it buys back 64 LABs,
+        // which the fitter cares about far more than the prepass does.
+        P_C0, P_C0W, P_CROW, P_CRD, P_CWR, P_CEND, // pass 1: count records
         P_SRD, P_SWR,                         // prefix sum -> runs
-        P_E0, P_EROW, P_ERD, P_EWR, P_EEND    // pass 2: place records
+        P_E0, P_E0W, P_EROW, P_ERD, P_EWR, P_EEND  // pass 2: place records
     } pst_t;
     pst_t pst;
     assign prepass_busy = (pst != P_IDLE);
@@ -618,10 +659,11 @@ module rf_video_spr
                     sum_y   <= 8'd0;
                     sum_acc <= '0;
                     pst     <= P_SRD;
-                end else begin
-                    `SPR_LOAD_EX
-                    pst <= P_CROW;
-                end
+                end else pst <= P_C0W;    // let sly_q catch up with ex_i
+            end
+            P_C0W: begin
+                `SPR_LOAD_EX
+                pst <= P_CROW;
             end
             P_CROW: `RUN_STEP(P_CROW, P_CRD, P_CEND)
             P_CRD: begin
@@ -669,10 +711,11 @@ module rf_video_spr
                     rec_peak <= rows_tot;
                     rec_drop <= drop_cnt;
                     pst <= P_IDLE;
-                end else begin
-                    `SPR_LOAD_EX
-                    pst <= P_EROW;
-                end
+                end else pst <= P_E0W;    // let sly_q catch up with ex_i
+            end
+            P_E0W: begin
+                `SPR_LOAD_EX
+                pst <= P_EROW;
             end
             P_EROW: `RUN_STEP(P_EROW, P_ERD, P_EEND)
             P_ERD: begin

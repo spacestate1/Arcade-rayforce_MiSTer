@@ -689,9 +689,14 @@ logic [55:0] aud_ring_data;
 //
 //   bit [1:0]  visarea: 0 = f3_224a (Ray Force), 1 = f3_224b,
 //                       2 = f3_224c, 3 = f3
-//   bit [2]    extend   (1 = 1024x512 playfields; both Ray Force and
-//                       Elevator Action Returns are 1, and the renderer is
-//                       still hardwired to it -- reserved, not yet read)
+//   bit [2]    NON-extend (1 = eight 32x32 playfields, MAME's extend=0:
+//                       Puzzle Bobble 2/3/4, Darius Gaiden, Cleopatra
+//                       Fortune, Grid Seeker, Space Invaders '95,
+//                       Gekirindan. 0 = four 64x32, which is Ray Force,
+//                       Elevator Action Returns and both Bubble Bobble
+//                       games.) Note the inverted sense against MAME's own
+//                       "extend" naming: a 0 byte has to keep meaning what
+//                       every MRA written before this bit went live meant.
 //   bit [4:3]  sprite lag in frames (reserved; the engine does 1 today,
 //                       MAME does 2 for both of these games)
 //
@@ -708,6 +713,13 @@ always_ff @(posedge clk_sys) begin
     else if (ioctl_wr && ioctl_index == 8'd1) game_cfg <= ioctl_dout[7:0];
 end
 wire [1:0] cfg_vis  = game_cfg[1:0];
+// Bit [2] is live from this build, and its POLARITY IS INVERTED from the
+// reserved-bit comment above, deliberately. Every MRA written before now
+// carries 0 in it, and every game the core has ever run is extend=1, so 0
+// has to keep meaning extend=1 or Ray Force and Elevator Action Returns
+// both break the moment the bit is read. So the bit asks for the NEW
+// behaviour: 1 = non-extend (eight 32x32 playfields), 0 = extend as before.
+wire       cfg_extend = ~game_cfg[2];
 wire [1:0] cfg_game = game_cfg[7:6];        // which game's expectations
 
 // What the self test should EXPECT, per game. These are properties of the
@@ -737,6 +749,41 @@ always_comb begin
             exp_bist  = 32'h399D4BCA; exp_hash = 32'h93368F3C;
             exp_smp   = 32'h52DDF5D3;
         end
+        // The Bubble Bobble II / Bubble Memories expectations are MEASURED
+        // and correct -- they are in PREP-BUBBLE.md, and the arms below are
+        // ready to re-enable. They are commented out because the fitter is
+        // 10 LABs short (Error 170012) and this is the cheapest thing in the
+        // design to give up: with no arm, ids 2 and 3 fall to the default
+        // and the self-test rows REPORT what they find instead of judging
+        // it, which is the safe behaviour those rows were designed around.
+        // The right fix is to move all five expectations into an M10K ROM
+        // indexed by game_id -- block memory is only 75 % used and is not
+        // the binding resource -- which costs no LABs and scales to eight
+        // games. Do that with the cfg_game widening, then restore these.
+        //
+        //   bublbob2: bytes 01280000 sum A364D1A1 bist BE0F04C3
+        //             hash A7C4A522 smp 5597A419
+        //   bubblem:  bytes 01280000 sum A5923CBE bist C4BD753B
+        //             hash A81F4977 smp 9C2DE26F
+        /* -----------------------------------------------------------------
+        2'd2: begin                                    // Bubble Bobble II
+            // Measured 2026-08-31 the same way EAR's were, each method first
+            // reproduced on a game whose answer was already known: the stream
+            // numbers from tools/rf_stream_sum.py over the MRA, the sample
+            // fold from the first 64 KB of d90-04 (the same fold gives Ray
+            // Force's B86C4865), and the write hash from
+            // tools/oracle_f3writes.lua + rf_write_compare.py, which
+            // reproduced Ray Force's 10620931 in the same run.
+            exp_bytes = 32'h01280000; exp_sum  = 32'hA364D1A1;
+            exp_bist  = 32'hBE0F04C3; exp_hash = 32'hA7C4A522;
+            exp_smp   = 32'h5597A419;
+        end
+        2'd3: begin                                    // Bubble Memories
+            exp_bytes = 32'h01280000; exp_sum  = 32'hA5923CBE;
+            exp_bist  = 32'hC4BD753B; exp_hash = 32'hA81F4977;
+            exp_smp   = 32'h9C2DE26F;
+        end
+        ----------------------------------------------------------------- */
         default: begin                                 // not yet measured
             exp_bytes = 32'h00000000; exp_sum  = 32'h00000000;
             exp_bist  = 32'h00000000; exp_hash = 32'h00000000;
@@ -1172,6 +1219,21 @@ rf_video_pipe vpipe
     .div(vid_div), .hcnt(vid_hcnt), .vcnt(vid_vcnt),
     .hblank(hblank), .vblank(vblank), .rate_60(rate_60),
     .ctrl0(vctrl0), .ctrl1(vctrl1), .flip(1'b1), .vis_mode(cfg_vis),
+    // EXTEND IS TIED OFF, 2026-08-31, and the RTL behind it is kept.
+    // extend=0 is implemented and verified end to end -- the model against
+    // MAME (Puzzle Bobble 2 frame 1800 pixel-identical) and the RTL against
+    // the model (all seven bench suites at baseline pixel counts) -- but it
+    // costs ~1158 ALMs / ~116 LABs and the design has no room: three fits in
+    // a row died on Error 170012, and the third got WORSE (4321 LABs) after
+    // reductions that should have helped, which says fitter variance at this
+    // utilisation is larger than anything trimming can buy.
+    //
+    // Tying it to a constant lets Quartus fold every extend mux away, so the
+    // code costs nothing while it waits. Restore `cfg_extend` here once the
+    // LAB budget has real headroom -- see PREP-BUBBLE.md for the plan (the
+    // expectations ROM, and the record store is the elephant at ~19 % of the
+    // device). Nothing else needs changing to bring it back.
+    .extend(1'b1),
     .line_addr(v_line_addr), .line_q(v_line_q),
     .pf_addr(v_pf_addr),     .pf_q(v_pf_q),
     .pal_addr(v_pal_addr),   .pal_q(v_pal_q),

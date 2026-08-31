@@ -64,6 +64,12 @@ module rf_video_pipe
     // lines outside Ray Force's 224-line window are dropped
     input  logic  [1:0] vis_mode,
 
+    // f3_config_table "extend": 1 = four 64x32 playfields (Ray Force,
+    // Elevator Action Returns, both Bubble Bobble games), 0 = eight 32x32
+    // (Puzzle Bobble, Darius Gaiden, Cleopatra Fortune, Grid Seeker,
+    // Space Invaders '95, Gekirindan). Changes playfield addressing.
+    input  logic        extend,
+
     // video RAM read ports (B side of the CPU's BRAMs)
     output logic [14:0] line_addr,
     input  logic [15:0] line_q,
@@ -200,13 +206,14 @@ module rf_video_pipe
     logic             pivot_bsel, pivot_mosaic, sp_mosaic;
     logic [3:0][15:0] sp_mix, pf_pal_add, pf_mix;
 
-    // gunlock is an "extend" (1024x512) board: MAME takes that from its
-    // per-game config table, not from control word 15, and so does this.
+    // "extend" (1024x512 playfields) comes from MAME's per-game config
+    // table, not from control word 15, and so it comes from the MRA's game
+    // config byte here rather than from anything the game writes.
     rf_video_line line (
         .clk(clk), .reset(reset),
         .frame_start(frame_start), .line_start(dec_start),
         .y(flip_eff ? (8'd255 - bld_y) : bld_y),
-        .extend(1'b1), .busy(line_busy),
+        .extend(extend), .busy(line_busy),
         .lr_addr(line_addr), .lr_q(line_q),
         .clip_l(clip_l), .clip_r(clip_r), .blend(blend), .x_sample(x_sample),
         .fx_6400(fx_6400), .bg_palette(bg_palette),
@@ -237,6 +244,7 @@ module rf_video_pipe
         .clk(clk), .reset(reset),
         .frame_start(frame_start), .ctrl0(ctrl0), .flip(flip_eff),
         .line_start(pf_go), .screen_y(bld_y),
+        .extend(extend), .alt_tilemap(pf_alt),
         .colscroll(colscroll), .x_scale(x_scale), .y_scale(y_scale),
         .rowscroll(rowscroll), .mosaic_en(pf_mosaic), .x_sample(x_sample),
         .busy(pf_busy),

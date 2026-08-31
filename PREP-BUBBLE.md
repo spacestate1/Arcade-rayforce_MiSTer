@@ -1,0 +1,185 @@
+# Bubble Bobble II and Bubble Memories: preparation
+
+Prep for bringing the two Taito F3 Bubble Bobble games up on this core. No
+RTL has been changed and nothing has run on hardware. What this establishes:
+the MRAs, all ten self-test expectations, reference dumps for both games, and
+one finding that decides the order of work -- **the Python reference model
+does not yet reproduce these games exactly, and it must before any RTL
+comparison means anything.**
+
+    bublbob2   Bubble Bobble II (Ver 2.6O 1994/12/16)   D90
+    bubblem    Bubble Memories (Ver 2.4O 1996/02/15)    E21
+
+ROM sets: `/storage02/roms/mame/{bublbob2,bubblem}.zip`, merged sets holding
+every part these MRAs name, all CRCs verified against MAME 0.288.
+
+## These two are closer to Ray Force than Elevator Action is
+
+Elevator Action Returns cost a visarea parameter because its raster is the
+base f3 one (232 lines from 24) where Ray Force uses f3_224a (224 from 31).
+**Both Bubble games use f3_224a -- Ray Force's exact crop.** MAME's machine
+config says so and the dumped frames come out 320x224. The per-game field
+EAR forced into existence is, for these two, Ray Force's own value: `0`.
+
+| | Ray Force | Elev. Action R. | Bubble Bobble II | Bubble Memories |
+|---|---|---|---|---|
+| MAME machine | `f3_224a` | `f3` | `f3_224a` | `f3_224a` |
+| visarea | 224 from 31 | 232 from 24 | **224 from 31** | **224 from 31** |
+| `extend` | 1 | 1 | 1 | 1 |
+| rotation | ROT90 vert | ROT0 horiz | ROT0 horiz | ROT0 horiz |
+| 12-bit palette | no | no | no | no |
+| `sprites_hi` ROM | yes | yes | yes | **none (4bpp)** |
+| 18.5 MB map | pads half | exact | pads half | maincpu+sprites exact |
+
+## All ten expectations are measured
+
+`Rayforce.sv` holds five expectations per game so the self-test page can
+judge rather than merely report. All five, for both games, are done:
+
+|  | Bubble Bobble II | Bubble Memories |
+|---|---|---|
+| `exp_bytes` | `0x01280000` | `0x01280000` |
+| `exp_sum`   | `0xA364D1A1` | `0xA5923CBE` |
+| `exp_bist`  | `0xBE0F04C3` | `0xC4BD753B` |
+| `exp_hash`  | `0xA7C4A522` | `0xA81F4977` |
+| `exp_smp`   | `0x5597A419` | `0x9C2DE26F` |
+
+Every one was produced by a method validated on a known answer first:
+`rf_stream_sum.py` over the MRA (and that both streams assemble to exactly
+`0x1280000` is itself proof the MRAs lay the regions out right); the rotl1+add
+fold of the first 64 KB of the first ensoniq ROM, which reproduces Ray
+Force's known `0xB86C4865` from `gunlock.zip`; and `oracle_f3writes.lua` +
+`rf_write_compare.py`, which reproduced Ray Force's known `0x10620931` in the
+same run that produced the two new hashes.
+
+## Two things that look like problems and are not
+
+**Sprite lag.** MAME's `f3_config_table` declares lag 1 for both games,
+against Ray Force's 2. Measured against MAME's own frames, that table value
+does not describe this dump pipeline: depth 2 beats depth 1 decisively
+(bb2: 0.0-1.2% at depth 2 versus 6.7-83.8% at depth 1). Depths 3, 4, 5 and 6
+are byte-identical to depth 2. **The existing lag-2 tooling is already
+correct for these games. Do not change it, and do not add a lag parameter.**
+
+**Bubble Memories has no `sprites_hi` ROM.** MAME declares the region
+`EMPTY_SPRITE_HIDATA(0x200000)` -- 2 MB of zeros -- so its sprites are
+effectively 4bpp where every other set is 6bpp. This was the obvious
+structural risk, and it is disproved: bmem frames 900, 1200 and 1800 render
+**pixel-identical** to MAME with that region all zeros. The 4bpp path is
+correct.
+
+## The real gap: the model is not exact for these games
+
+Model versus MAME's own frames, depth 2, ten dumped frames each:
+
+| frame | 600 | 900 | 1200 | 1800 | 2400 | 3000 | 3600 | 4200 | 4800 | 5400 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **bb2** | 1.23% | 0.84% | 0.56% | 0.09% | 0.41% | 0.39% | 0.48% | **0** | **0** | **0** |
+| **bmem** | 1.14% | **0** | **0** | **0** | 1.87% | 0.42% | 0.42% | 14.69% | 0.20% | 0.62% |
+
+The control matters: on Ray Force's own dumps the same command gives
+`0 / 71680` on every frame. So this is a real gap, not a harness artifact.
+
+What is ruled out, by measurement rather than argument:
+
+- **not sprite lag or history depth** -- depths 2 through 6 are identical to
+  the byte, including on the 14.69% outlier, for which frames 4194-4199 were
+  dumped specifically to test it
+- **not zoom** -- bmem frame 4200 uses zero zoom on all 324 sprites, while
+  Ray Force uses zoom on 326 of its 503 and is exact
+- **not the missing `sprites_hi`** -- see above
+
+What it points at. The differences are confined to sprite pixels, and these
+games hammer the sprite multi/block/lock path an order of magnitude harder
+than Ray Force ever does:
+
+| dump | sprites | multi | lock | blockX != 0 |
+|---|---|---|---|---|
+| rayforce 3000 | 503 | 48 | 40 | **10** |
+| bb2 600 | 754 | 730 | 730 | **742** |
+| bmem 1800 | 1148 | 1026 | 1038 | **1084** |
+| bmem 4200 | 324 | 306 | 306 | **314** |
+
+Ray Force sets block control on 2% of its sprites; the Bubble games set it on
+97%. That is the path Ray Force cannot have proven, and the residual error
+lives in it. Note that it is not simply broken -- bb2 4200 (222 multi) and
+bmem 1800 (1026 multi) are pixel-exact -- so the bug is a specific case
+inside block/multi handling, not the feature as a whole.
+
+`dump/bmem/f3_04200_diff.png` is the loudest example, and
+`dump/bmem/f3_04200_model.png` beside `f3_04200_frame.argb` shows it plainly:
+two mid-screen dragons drawn with the wrong pixels while the tilemaps,
+palette and everything above y=130 match exactly.
+
+## Order of work
+
+1. **Close the model gap first.** It is in `tools/f3_render.py`'s sprite
+   block/multi handling, and until it is closed the RTL has no trustworthy
+   reference for these games. Start at bmem 4200.
+2. Widen `cfg_game` past 2 bits while it is cheap. These two games fill it:
+   ids 0/1/2/3 become Ray Force, Elevator Action Returns, Bubble Bobble II,
+   Bubble Memories, and a fifth F3 title would need the field widened and
+   every MRA's config byte re-issued.
+3. Add the `2'd2`/`2'd3` expectation arms with the numbers above. Until then
+   the self-test rows report instead of judging, which is the designed-in
+   safe default -- the games still run.
+4. Add `bb2-*`/`bmem-*` targets to `sim/Makefile`, modelled on the `ear-*`
+   ones but with **no** visarea or lag override, since both match Ray Force.
+5. Run the benches for Bubble Bobble II against `dump/bb2` -- the cheaper
+   target, its ROM shape being Ray Force's in every region, padding included.
+6. Then Bubble Memories.
+7. Only then hardware: load, read the self-test page, screenshot attract.
+
+## What else the ROM shelf holds
+
+`/storage02/roms/mame` has **35 of the driver's 100 F3 parent sets**. Scoring
+each against what this core can actually do -- does it fit the 18.5 MB
+universal map (by real ROM bytes, not MAME's declared region sizes), is it
+`extend=1`, is it off the 12-bit palette list -- gives a roadmap. The method
+validates: `gunlock` and `elvactr`, the two already running, score clean.
+
+**Blocked by nothing at all** (beyond the `cfg_game` width below):
+
+| set | visarea | rot | lag | |
+|---|---|---|---|---|
+| `gunlock` | f3_224a | ROT90 | 2 | running |
+| `elvactr` | f3 | ROT0 | 2 | running |
+| `bublbob2` | f3_224a | ROT0 | 1 | prepped here |
+| `bubblem` | f3_224a | ROT0 | 1 | prepped here |
+| `arkretrn` | f3 | ROT0 | 1 | Arkanoid Returns |
+| `popnpop` | f3 | ROT0 | 1 | Pop'n Pop |
+| `qtheater` | f3_224c | ROT0 | 1 | Quiz Theater (first f3_224c user) |
+| `recalh` | f3 | ROT0 | 1 | Recalhorn (prototype) |
+| `twinqix` | f3_224a | ROT0 | 1 | Twin Qix (prototype) |
+
+So five more games are, on paper, MRA-and-a-config-byte work.
+
+**The biggest single unlock is `extend=0`.** The renderer is hardwired to
+`extend=1`. Seven available sets are blocked by that and nothing else:
+`cleopatr`, `dariusg`, `dariusgx`, `gekiridn`, `gseeker`, `spcinv95`,
+`pbobble2`. Darius Gaiden alone probably justifies the work.
+
+**Second unlock: widen the universal map.** Six sets need only more room --
+`sprites` past 4 MB (`commandw`, `lightbr`, `trstar`, `quizhuhu`,
+`puchicar`) or `ensoniq` past 4 MB (`landmakr`, `puchicar`, `quizhuhu`).
+
+**Third: the 12-bit palette path** (`ridingf`, and with extend=0 also
+`arabianm`, `ringrage`). MAME itself flags this one as guesswork.
+
+Out of reach without a much bigger map: `kaiserkn`, `dankuga`, `kirameki`,
+`pwrgoal`, `tcobra2`, at 12-13 MB of sprites each.
+
+**This is what makes the `cfg_game` width urgent.** A 2-bit field caps the
+core at four games total, and Bubble Bobble II and Bubble Memories take the
+last two ids. Every game in the tables above is unreachable until that field
+grows, whatever else gets implemented. Widening it is a one-line RTL change
+plus a config byte in four MRAs today; later it is a re-issue of every MRA
+ever shipped.
+
+## Artifacts produced
+
+- `releases/experimental/Bubble Bobble II.mra`, `.../Bubble Memories.mra`
+  (both marked UNTESTED)
+- `dump/bb2/`, `dump/bmem/` -- 10 frames each plus predecessors, regions
+  included; `dump/bmem/` also has 4194-4199 from the depth experiment
+- `dump/wr/{rayforce,bublbob2,bubblem}.tr` -- write-stream traces

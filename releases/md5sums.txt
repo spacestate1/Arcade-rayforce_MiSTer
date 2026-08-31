@@ -3,7 +3,8 @@
 # Verify with either:
 #     python3 tools/check_files.py
 #     md5sum -c md5sums.txt      (run from releases/)
-89b4c82d18eed2986bfc6a8398a35c9a  Gunlock.mra
-21fc4578a613fd49954acb3722e93562  Ray Force (Japan).mra
-1b3f14389fb5d21c598588384dcd2d32  Ray Force.mra
+aa5f23287b6bbc69fa3c716bd282d21a  Gunlock.mra
+706cfbc447594cffcbb2eaa45fa226a6  Ray Force (Japan).mra
+5f7f8bb9e29a6be77eeffa5598b8197e  Ray Force.mra
 18c1d2277316529e1f8766ad9dbb51ff  Rayforce_20260828.rbf
+d02956376eaf9cffa71a594cb8be9823  Rayforce_20260831.rbf

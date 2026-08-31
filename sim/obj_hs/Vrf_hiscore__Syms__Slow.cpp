@@ -11,7 +11,7 @@ Vrf_hiscore__Syms::Vrf_hiscore__Syms(VerilatedContext* contextp, const char* nam
     , TOP{this, namep}
 {
     // Check resources
-    Verilated::stackCheck(354);
+    Verilated::stackCheck(356);
     // Setup sub module instances
     // Configure time unit / time precision
     _vm_contextp__->timeunit(-12);
@@ -19,6 +19,8 @@ Vrf_hiscore__Syms::Vrf_hiscore__Syms(VerilatedContext* contextp, const char* nam
     // Setup each module's pointers to their submodules
     // Setup each module's pointer back to symbol table (for public functions)
     TOP.__Vconfigure(true);
+    // Setup export functions - final: 0
+    // Setup export functions - final: 1
 }
 
 Vrf_hiscore__Syms::~Vrf_hiscore__Syms() {

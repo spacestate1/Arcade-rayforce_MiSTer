@@ -142,8 +142,25 @@ module rf_hiscore
     // ---- FSM -------------------------------------------------------------
     typedef enum logic [2:0] { H_IDLE, H_SETTLE, H_GUARD, H_INJ, H_CAP, H_DONE } hst_t;
     hst_t hst;
-    logic       injected;               // done: the table was written once
+    logic       injected;               // the table has been written at least once
     logic       poll_done;              // done: no (further) poll will help
+
+    // ONE INJECT IS NOT ENOUGH, measured on hardware 2026-08-31. The guards
+    // say "the game has written the byte we recognise", not "the game has
+    // finished initialising". Ray Force's gv[0] is the 'A' of the default
+    // top scorer ABE, so the guard passes the moment that byte lands and the
+    // inject can be overwritten by the rest of the game's own table build.
+    // A one-shot inject then loses the save for good: the board loaded a
+    // valid 256-byte .nvm with all four file guards intact and still showed
+    // the game's defaults.
+    //
+    // So inject on every vblank the guards allow, for a bounded window,
+    // rather than once. The write is idempotent -- the same bytes over the
+    // same addresses -- and the window closes long before a player can post
+    // a score, so a late re-inject cannot eat one. Costs the same ~10 us of
+    // clkena hold the guard poll already takes each vblank.
+    localparam logic [9:0] INJ_TRIES = 10'd600;   // ~10 s at 60 Hz
+    logic [9:0] inj_left;
     logic       capturing;
     logic       sh_ok;                  // shadow guards match, so far
     logic [7:0] idx;
@@ -162,6 +179,7 @@ module rf_hiscore
             hst <= H_IDLE; hs_pause <= 1'b0;
             injected <= 1'b0; poll_done <= 1'b0; save_ready <= 1'b0;
             capturing <= 1'b0; ld_pend <= 1'b0; rd_ph <= 2'd0;
+            inj_left <= INJ_TRIES;
         end else begin
             // Loader words write the shadow directly unless a capture is
             // mid-flight (H_CAP is the only other shadow writer); then one
@@ -210,7 +228,7 @@ module rf_hiscore
                             if (sh_byte != gv[gph]) sh_ok <= 1'b0;
                             if (gph == 2'd3) begin
                                 save_ready <= 1'b1;    // guards seen: saves on
-                                if (sh_ok && (sh_byte == gv[gph]) && !injected) begin
+                                if (sh_ok && (sh_byte == gv[gph]) && (inj_left != 10'd0)) begin
                                     idx <= 8'd0; sh_idx <= 8'd0; hst <= H_INJ;
                                 end else begin
                                     poll_done <= 1'b1; hst <= H_DONE;
@@ -229,7 +247,12 @@ module rf_hiscore
                     hs_be    <= lane_of(cur_b);
                     hs_we    <= 1'b1;
                     if (idx == total - 8'd1) begin
-                        injected <= 1'b1; poll_done <= 1'b1; hst <= H_DONE;
+                        injected <= 1'b1;
+                        inj_left <= inj_left - 10'd1;
+                        // the window closing is the only thing that ends the
+                        // poll now; save_ready is already up either way
+                        if (inj_left == 10'd1) poll_done <= 1'b1;
+                        hst <= H_DONE;
                     end else begin
                         idx <= idx + 8'd1; sh_idx <= idx + 8'd1;
                     end

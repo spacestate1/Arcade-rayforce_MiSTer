@@ -9,6 +9,7 @@
 #define VERILATED_VRF_HISCORE_H_  // guard
 
 #include "verilated.h"
+#include "svdpi.h"
 
 class Vrf_hiscore__Syms;
 class Vrf_hiscore___024root;

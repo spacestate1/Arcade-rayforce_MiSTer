@@ -18,6 +18,7 @@
 
 
 #include "verilated.h"
+#include "verilated_dpi.h"
 
 #include "Vrf_hiscore__Syms.h"
 #include "Vrf_hiscore.h"

@@ -84,6 +84,7 @@ module pf_top (
         .clk(clk), .reset(reset),
         .frame_start(frame_start), .ctrl0(ctrl0), .flip(flip),
         .line_start(pf_go), .screen_y(screen_y),
+        .extend(extend), .alt_tilemap(pf_alt),
         .colscroll(colscroll), .x_scale(x_scale), .y_scale(y_scale),
         .rowscroll(rowscroll),
         .mosaic_en(force_mosaic ? 4'b1111 : pf_mosaic),

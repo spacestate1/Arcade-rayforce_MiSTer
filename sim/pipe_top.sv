@@ -81,7 +81,10 @@ module pipe_top (
     output logic [31:0] dbg_sfetch,
     output logic [31:0] dbg_spr,
     output logic [31:0] dbg_rec,
-    input  logic  [1:0] vis_mode
+    input  logic  [1:0] vis_mode,
+    // f3_config_table extend; the bench's games are all extend=1, so the
+    // testbench leaves this at 1 unless it is driving a 32x32 set
+    input  logic        extend
 );
 
     logic [26:1] a_lo_addr, a_hi_addr, b_lo_addr, b_hi_addr;
@@ -94,6 +97,7 @@ module pipe_top (
         .div(div), .hcnt(hcnt), .vcnt(vcnt),
         .hblank(hblank), .vblank(vblank), .rate_60(rate_60),
         .ctrl0(ctrl0), .ctrl1(ctrl1), .flip(flip), .vis_mode(vis_mode),
+        .extend(extend),
         .line_addr(line_addr), .line_q(line_q),
         .pf_addr(pf_addr),     .pf_q(pf_q),
         .pal_addr(pal_addr),   .pal_q(pal_q),

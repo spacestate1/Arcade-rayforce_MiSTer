@@ -36,10 +36,31 @@ H_TOTAL, H_VIS, H_START = 432, 320, 46
 V_VIS, V_START = 232, 24
 NUM_PF, NUM_SP, NUM_CLIP = 4, 4, 4
 
+import os as _os
+
 # gunlock: f3_config_table extend = 1, sprite_lag = 2, and f3_224a crops to
 # set_visarea(46, 365, 31, 254).
-EXTEND = True
+# The playfield "extend" bit (f3_config_table). It is NOT cosmetic: it
+# changes the tilemap geometry, the playfield RAM stride and how many
+# tilemaps exist, so a game run with the wrong one renders a truncated or
+# aliased playfield rather than a subtly wrong one.
+#
+#   extend=1  four  64x32 tilemaps (1024x512), pf stride 0x2000 bytes,
+#             10-bit x wrap. Ray Force, Elevator Action Returns, both
+#             Bubble Bobble games.
+#   extend=0  eight 32x32 tilemaps (512x512),  pf stride 0x1000 bytes,
+#             9-bit x wrap, and playfield N may draw from tilemap N+2
+#             when line RAM's colscroll bit 0x200 is set (alt_tilemap).
+#             Puzzle Bobble 2/3/4, Darius Gaiden, Cleopatra Fortune,
+#             Grid Seeker, Space Invaders '95, Gekirindan.
+#
+#   F3_EXTEND=0 python3 ...
+EXTEND = _os.environ.get("F3_EXTEND", "1") != "0"
 WIDTH_MASK = 0x3FF if EXTEND else 0x1FF
+# tilemaps that exist, and the playfield RAM stride in 16-bit words
+NUM_TMAP = 4 if EXTEND else 8
+PF_STRIDE = 0x1000 if EXTEND else 0x800
+TMAP_COLS = 64 if EXTEND else 32
 VIS_X0, VIS_X1 = 46, 365
 
 # The vertical crop is the ONE thing that differs between the four Taito F3
@@ -139,11 +160,14 @@ def build_playfields(dump, pf_gfx, flip=False):
     """
     nelem = len(pf_gfx)
     pix, flg = [], []
-    for i in range(NUM_PF):
-        base = 0x1000 * i                       # word offset of playfield i
-        blk = dump.pf_ram[base:base + 0x1000]
-        attr = blk[0::2].reshape(32, 64).astype(np.int32)
-        code = blk[1::2].reshape(32, 64).astype(np.int32)
+    # extend=0 has EIGHT tilemaps, not four: playfield N can draw from map
+    # N+2 (alt_tilemap), so all eight have to be built even though only four
+    # playfields exist.
+    for i in range(NUM_TMAP):
+        base = PF_STRIDE * i                    # word offset of tilemap i
+        blk = dump.pf_ram[base:base + PF_STRIDE]
+        attr = blk[0::2].reshape(32, TMAP_COLS).astype(np.int32)
+        code = blk[1::2].reshape(32, TMAP_COLS).astype(np.int32)
 
         pal_code = attr & 0x1FF
         blend_sel = (attr >> 9) & 1
@@ -161,8 +185,8 @@ def build_playfields(dump, pf_gfx, flip=False):
         pm = (pal_code[..., None, None] * 16 + pen).astype(np.uint16)
         fm = np.where(pen != 0, (0x10 | blend_sel[..., None, None]), 0).astype(np.uint8)
 
-        pix.append(_flip(pm.transpose(0, 2, 1, 3).reshape(32 * 16, 64 * 16), flip))
-        flg.append(_flip(fm.transpose(0, 2, 1, 3).reshape(32 * 16, 64 * 16), flip))
+        pix.append(_flip(pm.transpose(0, 2, 1, 3).reshape(32 * 16, TMAP_COLS * 16), flip))
+        flg.append(_flip(fm.transpose(0, 2, 1, 3).reshape(32 * 16, TMAP_COLS * 16), flip))
     return pix, flg
 
 
@@ -783,9 +807,9 @@ class SpriteEngine:
 
 def row_usage_playfields(dump):
     used = []
-    for i in range(NUM_PF):
-        blk = dump.pf_ram[0x1000 * i: 0x1000 * (i + 1)]
-        code = blk[1::2].reshape(32, 64)
+    for i in range(NUM_TMAP):
+        blk = dump.pf_ram[PF_STRIDE * i: PF_STRIDE * (i + 1)]
+        code = blk[1::2].reshape(32, TMAP_COLS)
         used.append((code != 0).any(axis=1))
     return used
 

@@ -232,8 +232,6 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
     __Vfunc_rf_hiscore__DOT__guard_idx__3__g = 0;
     CData/*2:0*/ __Vdly__rf_hiscore__DOT__hst;
     __Vdly__rf_hiscore__DOT__hst = 0;
-    CData/*0:0*/ __Vdly__rf_hiscore__DOT__injected;
-    __Vdly__rf_hiscore__DOT__injected = 0;
     CData/*0:0*/ __Vdly__rf_hiscore__DOT__poll_done;
     __Vdly__rf_hiscore__DOT__poll_done = 0;
     CData/*0:0*/ __Vdly__rf_hiscore__DOT__capturing;
@@ -242,6 +240,8 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
     __Vdly__rf_hiscore__DOT__ld_pend = 0;
     CData/*1:0*/ __Vdly__rf_hiscore__DOT__rd_ph;
     __Vdly__rf_hiscore__DOT__rd_ph = 0;
+    SData/*9:0*/ __Vdly__rf_hiscore__DOT__inj_left;
+    __Vdly__rf_hiscore__DOT__inj_left = 0;
     CData/*5:0*/ __Vdly__rf_hiscore__DOT__ld_pw;
     __Vdly__rf_hiscore__DOT__ld_pw = 0;
     SData/*15:0*/ __Vdly__rf_hiscore__DOT__ld_pd;
@@ -279,11 +279,11 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
     CData/*0:0*/ __VdlySet__rf_hiscore__DOT__shadow__v3;
     __VdlySet__rf_hiscore__DOT__shadow__v3 = 0;
     // Body
-    __Vdly__rf_hiscore__DOT__injected = vlSelfRef.rf_hiscore__DOT__injected;
     __Vdly__rf_hiscore__DOT__poll_done = vlSelfRef.rf_hiscore__DOT__poll_done;
     __Vdly__rf_hiscore__DOT__capturing = vlSelfRef.rf_hiscore__DOT__capturing;
     __Vdly__rf_hiscore__DOT__ld_pend = vlSelfRef.rf_hiscore__DOT__ld_pend;
     __Vdly__rf_hiscore__DOT__rd_ph = vlSelfRef.rf_hiscore__DOT__rd_ph;
+    __Vdly__rf_hiscore__DOT__inj_left = vlSelfRef.rf_hiscore__DOT__inj_left;
     __Vdly__rf_hiscore__DOT__ld_pw = vlSelfRef.rf_hiscore__DOT__ld_pw;
     __Vdly__rf_hiscore__DOT__ld_pd = vlSelfRef.rf_hiscore__DOT__ld_pd;
     __Vdly__rf_hiscore__DOT__sh_ok = vlSelfRef.rf_hiscore__DOT__sh_ok;
@@ -301,12 +301,12 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
     if (vlSelfRef.reset) {
         __Vdly__rf_hiscore__DOT__hst = 0U;
         vlSelfRef.hs_pause = 0U;
-        __Vdly__rf_hiscore__DOT__injected = 0U;
         __Vdly__rf_hiscore__DOT__poll_done = 0U;
         vlSelfRef.save_ready = 0U;
         __Vdly__rf_hiscore__DOT__capturing = 0U;
         __Vdly__rf_hiscore__DOT__ld_pend = 0U;
         __Vdly__rf_hiscore__DOT__rd_ph = 0U;
+        __Vdly__rf_hiscore__DOT__inj_left = 0x0258U;
     } else {
         if (((IData)(vlSelfRef.ld_wr) & (4U != (IData)(vlSelfRef.rf_hiscore__DOT__hst)))) {
             __VdlyVal__rf_hiscore__DOT__shadow__v0 
@@ -408,8 +408,12 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
                 if (((IData)(vlSelfRef.rf_hiscore__DOT__idx) 
                      == (0x000000ffU & ((IData)(vlSelfRef.rf_hiscore__DOT__total) 
                                         - (IData)(1U))))) {
-                    __Vdly__rf_hiscore__DOT__injected = 1U;
-                    __Vdly__rf_hiscore__DOT__poll_done = 1U;
+                    __Vdly__rf_hiscore__DOT__inj_left 
+                        = (0x000003ffU & ((IData)(vlSelfRef.rf_hiscore__DOT__inj_left) 
+                                          - (IData)(1U)));
+                    if ((1U == (IData)(vlSelfRef.rf_hiscore__DOT__inj_left))) {
+                        __Vdly__rf_hiscore__DOT__poll_done = 1U;
+                    }
                     __Vdly__rf_hiscore__DOT__hst = 5U;
                 } else {
                     __Vdly__rf_hiscore__DOT__idx = 
@@ -442,7 +446,7 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
                                   & ((IData)(vlSelfRef.rf_hiscore__DOT__sh_byte) 
                                      == vlSelfRef.rf_hiscore__DOT__gv
                                      [vlSelfRef.rf_hiscore__DOT__gph])) 
-                                 & (~ (IData)(vlSelfRef.rf_hiscore__DOT__injected)))) {
+                                 & (0U != (IData)(vlSelfRef.rf_hiscore__DOT__inj_left)))) {
                                 __Vdly__rf_hiscore__DOT__idx = 0U;
                                 vlSelfRef.rf_hiscore__DOT__sh_idx = 0U;
                                 __Vdly__rf_hiscore__DOT__hst = 3U;
@@ -522,11 +526,11 @@ void Vrf_hiscore___024root___nba_sequent__TOP__0(Vrf_hiscore___024root* vlSelf) 
             __Vdly__rf_hiscore__DOT__hst = 1U;
         }
     }
-    vlSelfRef.rf_hiscore__DOT__injected = __Vdly__rf_hiscore__DOT__injected;
     vlSelfRef.rf_hiscore__DOT__poll_done = __Vdly__rf_hiscore__DOT__poll_done;
     vlSelfRef.rf_hiscore__DOT__capturing = __Vdly__rf_hiscore__DOT__capturing;
     vlSelfRef.rf_hiscore__DOT__ld_pend = __Vdly__rf_hiscore__DOT__ld_pend;
     vlSelfRef.rf_hiscore__DOT__rd_ph = __Vdly__rf_hiscore__DOT__rd_ph;
+    vlSelfRef.rf_hiscore__DOT__inj_left = __Vdly__rf_hiscore__DOT__inj_left;
     vlSelfRef.rf_hiscore__DOT__ld_pw = __Vdly__rf_hiscore__DOT__ld_pw;
     vlSelfRef.rf_hiscore__DOT__ld_pd = __Vdly__rf_hiscore__DOT__ld_pd;
     vlSelfRef.rf_hiscore__DOT__sh_ok = __Vdly__rf_hiscore__DOT__sh_ok;
@@ -714,7 +718,7 @@ void Vrf_hiscore___024root___eval(Vrf_hiscore___024root* vlSelf) {
 #ifdef VL_DEBUG
             Vrf_hiscore___024root___dump_triggers__ico(vlSelfRef.__VicoTriggered, "ico"s);
 #endif
-            VL_FATAL_MT("rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: Input combinational region did not converge after '--converge-limit' of 10000 tries");
+            VL_FATAL_MT("../rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: Input combinational region did not converge after '--converge-limit' of 10000 tries");
         }
         __VicoIterCount = ((IData)(1U) + __VicoIterCount);
         vlSelfRef.__VicoPhaseResult = Vrf_hiscore___024root___eval_phase__ico(vlSelf);
@@ -725,7 +729,7 @@ void Vrf_hiscore___024root___eval(Vrf_hiscore___024root* vlSelf) {
 #ifdef VL_DEBUG
             Vrf_hiscore___024root___dump_triggers__act(vlSelfRef.__VnbaTriggered, "nba"s);
 #endif
-            VL_FATAL_MT("rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: NBA region did not converge after '--converge-limit' of 10000 tries");
+            VL_FATAL_MT("../rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: NBA region did not converge after '--converge-limit' of 10000 tries");
         }
         __VnbaIterCount = ((IData)(1U) + __VnbaIterCount);
         vlSelfRef.__VactIterCount = 0U;
@@ -734,7 +738,7 @@ void Vrf_hiscore___024root___eval(Vrf_hiscore___024root* vlSelf) {
 #ifdef VL_DEBUG
                 Vrf_hiscore___024root___dump_triggers__act(vlSelfRef.__VactTriggered, "act"s);
 #endif
-                VL_FATAL_MT("rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: Active region did not converge after '--converge-limit' of 10000 tries");
+                VL_FATAL_MT("../rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: Active region did not converge after '--converge-limit' of 10000 tries");
             }
             vlSelfRef.__VactIterCount = ((IData)(1U) 
                                          + vlSelfRef.__VactIterCount);

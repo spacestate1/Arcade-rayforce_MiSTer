@@ -55,7 +55,7 @@ VL_ATTR_COLD void Vrf_hiscore___024root___eval_settle(Vrf_hiscore___024root* vlS
 #ifdef VL_DEBUG
             Vrf_hiscore___024root___dump_triggers__stl(vlSelfRef.__VstlTriggered, "stl"s);
 #endif
-            VL_FATAL_MT("rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: Settle region did not converge after '--converge-limit' of 10000 tries");
+            VL_FATAL_MT("../rtl/rf_hiscore.sv", 50, "", "DIDNOTCONVERGE: Settle region did not converge after '--converge-limit' of 10000 tries");
         }
         __VstlIterCount = ((IData)(1U) + __VstlIterCount);
         vlSelfRef.__VstlPhaseResult = Vrf_hiscore___024root___eval_phase__stl(vlSelf);
@@ -317,8 +317,8 @@ VL_ATTR_COLD void Vrf_hiscore___024root___ctor_var_reset(Vrf_hiscore___024root* 
     vlSelf->rf_hiscore__DOT__sh_idx = VL_SCOPED_RAND_RESET_I(8, __VscopeHash, 18363893015304587758ull);
     vlSelf->rf_hiscore__DOT__sh_byte = VL_SCOPED_RAND_RESET_I(8, __VscopeHash, 2099775375144653675ull);
     vlSelf->rf_hiscore__DOT__hst = VL_SCOPED_RAND_RESET_I(3, __VscopeHash, 5558038945115471654ull);
-    vlSelf->rf_hiscore__DOT__injected = VL_SCOPED_RAND_RESET_I(1, __VscopeHash, 17693916546945893465ull);
     vlSelf->rf_hiscore__DOT__poll_done = VL_SCOPED_RAND_RESET_I(1, __VscopeHash, 8794109520743523033ull);
+    vlSelf->rf_hiscore__DOT__inj_left = VL_SCOPED_RAND_RESET_I(10, __VscopeHash, 17153091176823437888ull);
     vlSelf->rf_hiscore__DOT__capturing = VL_SCOPED_RAND_RESET_I(1, __VscopeHash, 14423091434172742952ull);
     vlSelf->rf_hiscore__DOT__sh_ok = VL_SCOPED_RAND_RESET_I(1, __VscopeHash, 15356177182025684222ull);
     vlSelf->rf_hiscore__DOT__idx = VL_SCOPED_RAND_RESET_I(8, __VscopeHash, 357953266835107652ull);

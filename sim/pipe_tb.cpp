@@ -259,6 +259,9 @@ int main(int argc, char** argv) {
     };
 
     t->vis_mode = VIS_MODE;
+    // F3_EXTEND=0 for a 32x32-playfield set (Puzzle Bobble, Darius Gaiden);
+    // every game with dumps in this tree today is extend=1
+    { const char* e = getenv("F3_EXTEND"); t->extend = (e && !strcmp(e, "0")) ? 0 : 1; }
 
     t->reset = 1; t->flip = 1; t->rate_60 = rate60;
     for (int w = 0; w < 4; w++) { t->ctrl0[w] = ctrl[2 * w] | ((uint32_t)ctrl[2 * w + 1] << 16);

@@ -2,6 +2,7 @@
 #define VL_INCLUDE_OPT include
 #include "Vrf_hiscore.cpp"
 #include "Vrf_hiscore___024root__0.cpp"
+#include "Vrf_hiscore__Dpi.cpp"
 #include "Vrf_hiscore___024root__Slow.cpp"
 #include "Vrf_hiscore___024root__0__Slow.cpp"
 #include "Vrf_hiscore__Syms__Slow.cpp"

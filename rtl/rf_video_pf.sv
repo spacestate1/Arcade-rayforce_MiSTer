@@ -61,6 +61,16 @@ module rf_video_pf
     // ---- line build ----------------------------------------------------
     input  logic        line_start,
     input  logic  [7:0] screen_y,      // 0-255, for the "no y step after line 0" rule
+    // The f3_config_table "extend" bit. It changes the tilemap geometry, so
+    // it changes this module's addressing, not just a size somewhere:
+    //   1: four  64x32 maps, word address {pf[1:0], ty[4:0], tx[5:0], sel}
+    //   0: eight 32x32 maps, word address {map[2:0], ty[4:0], tx[4:0], sel}
+    // and in the 32-wide case a playfield may draw from map pf+2 when line
+    // RAM asked for it (alt_tilemap), which is what the extra four maps are
+    // for. MAME: "[.ttt yyyy yxxx xxa|h] non-extend / [.tty yyyy xxxx xxa|h]
+    // extend" in taito_f3_v.cpp pf_ram_w().
+    input  logic        extend,
+    input  logic [3:0]  alt_tilemap,   // per playfield, extend=0 only
     input  logic [3:0][8:0]  colscroll,
     input  logic [3:0][8:0]  x_scale,  // 1..256
     input  logic [3:0][8:0]  y_scale,
@@ -164,8 +174,16 @@ module rf_video_pf
     wire [8:0] gy_c = 9'(fy_shift + 24'(signed'({15'd0, colscroll[bpf]})));
 
     // pf_ram word address of tile (ty, tx): {pf, ty, tx, code?}
-    wire [13:0] a_attr = {bpf, ty, tx, 1'b0};
-    wire [13:0] a_code = {bpf, ty, tx, 1'b1};
+    // extend=0 narrows tx to 5 bits and widens the map select to 3, so the
+    // 14-bit address stays the same width either way.
+    wire [2:0] tmap3 = extend ? {1'b0, bpf}
+                              : (3'({1'b0, bpf}) + (alt_tilemap[bpf] ? 3'd2 : 3'd0));
+    // last column to probe, and the count that ends the scan (two extra
+    // steps for the RAM's registered q, as in extend mode)
+    wire [6:0] scan_last = extend ? 7'd63 : 7'd31;
+    wire [6:0] scan_end  = extend ? 7'd65 : 7'd33;
+    wire [13:0] a_attr = extend ? {bpf, ty, tx, 1'b0} : {tmap3, ty, tx[4:0], 1'b0};
+    wire [13:0] a_code = extend ? {bpf, ty, tx, 1'b1} : {tmap3, ty, tx[4:0], 1'b1};
 
     // ---- unpack writer (overlaps the next tile's fetch) ----------------
     logic        wr_active;
@@ -396,9 +414,14 @@ module rf_video_pf
             B_SCAN: begin
                 ty <= uy[8:4];
                 py <= uy[3:0];
-                if (scan_i <= 7'd63) pf_addr <= {bpf, uy[8:4], scan_i[5:0], 1'b1};
+                // a 32-wide map has half the columns to look at, and walking
+                // 64 of them would read the NEXT map's row and call this one
+                // used on its data
+                if (scan_i <= scan_last)
+                    pf_addr <= extend ? {bpf, uy[8:4], scan_i[5:0], 1'b1}
+                                      : {tmap3, uy[8:4], scan_i[4:0], 1'b1};
                 if (scan_i >= 7'd2 && pf_q != 16'd0) row_used <= 1'b1;
-                if (scan_i == 7'd65) begin
+                if (scan_i == scan_end) begin
                     b_used[bpf] <= row_used | (pf_q != 16'd0);
                     k   <= 6'd0;
                     gxt <= {gx_start[9:4], 4'd0};
@@ -417,7 +440,9 @@ module rf_video_pf
             // earlier to satisfy a bench whose RAM model had no latency, and
             // the hardware showed a black screen. The bench was wrong.
             B_TILE_A: begin
-                tx      <= flip ? (6'd63 - gxt[9:4]) : gxt[9:4];
+                // extend=0 wraps x at 512, not 1024: MAME's m_width_mask
+                tx      <= extend ? (flip ? (6'd63 - gxt[9:4]) : gxt[9:4])
+                                  : {1'b0, (flip ? (5'd31 - gxt[8:4]) : gxt[8:4])};
                 bst     <= B_TILE_C;
             end
             B_TILE_C: begin
