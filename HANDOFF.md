@@ -16,6 +16,19 @@ the board: every page row PASS, and its Audio Ring capture correlates
 the board's sound is MAME's, sample for sample, for the first time.** The story of the night is under "Morning summary" and
 "Overnight plan" below; the video work of 2026-08-27 follows after that.
 
+> **Read this first (2026-08-31). THE SPRITE SPLITS ARE FIXED.** Build
+> `31083249` (commit 17c5bfa) renders solid sprites in-game -- verified by
+> the HPS fill-probe (inject solid data into the DDR3 framebuffer, photograph
+> a solid rectangle; the broken builds photographed stripes at x%4==3) and by
+> live battleships matching MAME's reference. Root cause: the readout line
+> buffer wrote FOUR pixels a cycle into an inferred single-write-port RAM;
+> Quartus silently kept one lane, Verilator performed all four. Fixed with a
+> 64-bit rf_bram, one write per DDR beat. Outstanding: HDMI timing closure
+> (-0.385 ns; seed sweep running), a ~2/frame cosmetic over-count in
+> SPRLINE's miss half (sample at end-of-line, next build), the user's level-2
+> playthrough confirmation, and rf_hiscore wiring (staged in scratchpad).
+>
+> Older callout follows:
 > **Read this first (2026-08-30).** Build `29224005` is on the board. Two of
 > its three changes are confirmed working there (sticky self-test verdicts,
 > run-length sprite records); the third, `ch7`, **did not work** and the
