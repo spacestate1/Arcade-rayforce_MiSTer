@@ -131,6 +131,7 @@ module rf_spr_fb
     typedef enum logic [1:0] { R_IDLE, R_REQ, R_WAIT } rst_t;
     rst_t rst;
     logic  [6:0] r_word;            // words requested
+    logic [11:0] r_to;              // watchdog on a burst that never lands
     logic  [7:0] r_got;             // words returned; see the >= test below
     logic  [8:0] nf;                // next line to fetch (256 = done)
     logic  [1:0] r_fill;            // nf % NRB
@@ -189,13 +190,28 @@ module rf_spr_fb
     // The write side stays single-beat: the stored dump proves it keeps up,
     // and single beats let rotation's writes slot between ours without the
     // arbiter needing a lock.
-    assign ddr_burstcnt = (rst == R_REQ) ? 8'd80 : 8'd1;
+    // BURST 8, ten commands a line -- not 80 in one. The f2sdram bridge is
+    // Avalon-MM and caps its burst well below 80; asking for more returned
+    // fewer beats than requested, the wait state sat there for the rest it
+    // would never get, and the miss counter went to 5389 a frame. Eight is
+    // the length every MiSTer bridge accepts, and it still cuts the command
+    // count per line by 8x, which was the whole point.
+    // BURSTCNT 1 EVERYWHERE. The f2sdram bridge is Avalon-MM and caps its
+    // burst; a request for 80 returned fewer beats than asked, the wait
+    // state sat waiting for the rest, and the miss counter read 5389 a
+    // frame. Rather than guess the cap -- 8? 16? -- use the one length the
+    // framework itself proves works (screen_rotate has used BURSTCNT=1 on
+    // this port for years) and win the time back where it actually went
+    // missing: READ PRIORITY. 80 commands a line at ~8 cycles each is 640
+    // of a line's 3456, and the reader now takes them ahead of a writer
+    // that has a whole frame of slack.
+    assign ddr_burstcnt = 8'd1;
     assign ddr_be       = 8'hFF;
     assign ddr_rd       = (rst == R_REQ);
     assign ddr_we       = (wst == W_ISSUE) && (rst != R_REQ);
     assign ddr_din      = w_acc;
     assign ddr_addr     = (rst == R_REQ)
-                        ? line_word(~par, nf[7:0])
+                        ? (line_word(~par, nf[7:0]) + 29'(r_word))
                         : (line_word(w_bank, w_line) + 29'(w_word));
 
     always_ff @(posedge clk) begin
@@ -203,7 +219,7 @@ module rf_spr_fb
             wst <= W_IDLE; rst <= R_IDLE;
             r_fill <= 2'd0; buf_ok <= '0; nf <= 9'd0;
             for (int b = 0; b < NRB; b++) buf_line[b] <= 8'd0;
-            w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 8'd0;
+            w_word <= 0; w_pix <= 0; r_word <= 0; r_got <= 8'd0; r_to <= 12'd0;
         end else begin
             if (frame_start) begin
                 buf_ok <= '0;           // last frame's lines are stale
@@ -242,18 +258,30 @@ module rf_spr_fb
             case (rst)
                 R_IDLE: if (!nf[8] && (nf < {1'b0, rd_line} + NRB)) begin
                     r_fill <= nf[1:0];
-                    r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
+                    r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; rst <= R_REQ;
                 end
-                // one command for the whole line; the beats stream back
-                R_REQ: if (!ddr_busy) rst <= R_WAIT;
+                // one command per 8 beats; the beats stream back on DOUT
+                R_REQ: if (!ddr_busy) begin
+                    if (r_word == WPL - 1) rst <= R_WAIT;
+                    else r_word <= r_word + 7'd1;
+                end
                 // >=, not the exact cycle the last word lands: with a fast
                 // memory the returns keep pace with the requests and this
                 // counter is already past it by the time R_WAIT is entered.
-                R_WAIT: if (r_got >= WPL) begin
-                    buf_line[r_fill] <= nf[7:0];
-                    buf_ok[r_fill]   <= 1'b1;
-                    nf               <= nf + 9'd1;
-                    rst              <= R_IDLE;
+                // A short burst must never wedge this: if the beats do not
+                // arrive, give the line up and move on rather than stalling
+                // the window for the rest of the frame.
+                R_WAIT: begin
+                    r_to <= r_to + 12'd1;
+                    if (r_got >= WPL) begin
+                        buf_line[r_fill] <= nf[7:0];
+                        buf_ok[r_fill]   <= 1'b1;
+                        nf               <= nf + 9'd1;
+                        rst              <= R_IDLE;
+                    end else if (&r_to) begin
+                        nf  <= nf + 9'd1;       // skip it; the miss counter says
+                        rst <= R_IDLE;
+                    end
                 end
                 default: rst <= R_IDLE;
             endcase

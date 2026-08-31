@@ -1,0 +1,253 @@
+//============================================================================
+//  High-score save/restore -- the hiscore.dat mechanism, in RTL.
+//
+//  Neither game saves scores itself: the 93C46 holds settings only, and the
+//  score table lives in main RAM and dies with the power. MAME's answer is
+//  the hiscore plugin -- per-game RAM ranges plus guard bytes that say when
+//  the game has finished initialising its default table; dumped on exit,
+//  written back on boot once the guards match. This is that mechanism, with
+//  the tables from MAME's own plugins/hiscore/hiscore.dat:
+//
+//    gunlock/rayforce/rayforcej:  40eff4 len 40 start 41 end 00
+//                                 4022fa len  4 start 01 end 00
+//    elvactr family:              40ce3a len 7c start 00 end 01
+//                                 40ce3c len  1 start c3 end c3
+//
+//  (Main RAM is at 0x400000: byte offsets 0xeff4/0x22fa and 0xce3a/0xce3c.
+//  EAR's second range sits inside its first -- an extra check byte -- and
+//  is dumped after it all the same, so a dump here lays out exactly as the
+//  dat describes and hi2txt can read the .nvm's upper half.)
+//
+//  STORAGE rides the EXISTING NVRAM blob: bytes 0-127 of ioctl index 254
+//  stay the EEPROM, bytes 128-255 are the score snapshot, and the MRA's
+//  <nvram> grows to 256. The same OSD-open save writes both. An old
+//  128-byte .nvm never delivers the upper half, the shadow then fails the
+//  guard check, and nothing is injected -- backward compatible by
+//  construction.
+//
+//  RAM ACCESS borrows the CPU's own port: raise hs_pause (rf_main's clkena
+//  hold, the same one the OSD Pause uses), wait out any in-flight bus
+//  cycle, mux u_ram. The CPU latches nothing while clkena is held and its
+//  read is re-presented on release, so the borrow is invisible. An inject
+//  is ~500 cycles of pause -- ten microseconds, once per boot; the guard
+//  polls while waiting are ~30 cycles, once per vblank, and stop for good
+//  once the answer is known.
+//
+//  FIRST RUN MATTERS: with no valid file there is nothing to inject, but
+//  the save must still happen or no score would ever be written. So the
+//  guard poll runs regardless, and save_ready is raised the first time the
+//  GAME's guards match -- inject or no inject.
+//
+//  Rules this module keeps (each one a build failure elsewhere in this
+//  core's history): the shadow has ONE writer block (loader words are
+//  queued and drained by the same FSM that writes captures -- Quartus
+//  refuses multiple constant drivers); reads honour the REGISTERED
+//  address + registered q = data valid two cycles after presenting; and
+//  the guard bytes are checked by walking them one per step, not as a
+//  four-way combinational read of one MLAB.
+//============================================================================
+
+module rf_hiscore
+(
+    input  logic        clk,
+    input  logic        reset,
+
+    input  logic  [1:0] game_id,        // 0 = Ray Force family, 1 = EAR
+    input  logic        run,            // CPU out of reset and running
+    input  logic        vbl_rise,       // poll cadence while waiting
+
+    // ---- load: the upper half of the ioctl-254 blob (16-bit LE words) ---
+    input  logic        ld_wr,
+    input  logic  [5:0] ld_word,        // word 0-63 of the 128-byte slot
+    input  logic [15:0] ld_data,
+
+    // ---- save: the same words back; valid 2 clocks after sv_word --------
+    input  logic  [5:0] sv_word,
+    output logic [15:0] sv_data,
+    input  logic        ioctl_upload,   // rising edge = capture RAM first
+
+    // ---- the borrowed RAM port ------------------------------------------
+    output logic        hs_pause,
+    output logic [15:0] hs_addr,        // 16-bit word address in the 128 KB
+    output logic [15:0] hs_wdata,
+    output logic  [1:0] hs_be,
+    output logic        hs_we,
+    input  logic [15:0] hs_q,           // registered raddr + registered q
+
+    output logic        save_ready     // guards seen: worth requesting a save
+);
+
+    // ---- per-game table --------------------------------------------------
+    logic [16:0] r0_off, r1_off;
+    logic  [7:0] r0_len, r1_len;
+    logic  [7:0] gv [0:3];              // guard values, in walk order
+    always_comb begin
+        if (game_id == 2'd1) begin      // Elevator Action Returns
+            r0_off = 17'h0ce3a; r0_len = 8'h7c;
+            r1_off = 17'h0ce3c; r1_len = 8'h01;
+            gv[0] = 8'h00; gv[1] = 8'h01; gv[2] = 8'hc3; gv[3] = 8'hc3;
+        end else begin                  // Ray Force / Gunlock
+            r0_off = 17'h0eff4; r0_len = 8'h40;
+            r1_off = 17'h022fa; r1_len = 8'h04;
+            gv[0] = 8'h41; gv[1] = 8'h00; gv[2] = 8'h01; gv[3] = 8'h00;
+        end
+    end
+    wire [7:0] total = r0_len + r1_len;
+
+    // dump byte index -> RAM byte offset (ranges concatenated, dat order)
+    function automatic logic [16:0] dump_off(input logic [7:0] i);
+        dump_off = (i < r0_len) ? (r0_off + 17'(i))
+                                : (r1_off + 17'(i - r0_len));
+    endfunction
+    // guard g -> RAM byte offset / dump byte index
+    function automatic logic [16:0] guard_off(input logic [1:0] g);
+        guard_off = (g == 2'd0) ? r0_off
+                  : (g == 2'd1) ? (r0_off + 17'(r0_len) - 17'd1)
+                  : (g == 2'd2) ? r1_off
+                                : (r1_off + 17'(r1_len) - 17'd1);
+    endfunction
+    function automatic logic [7:0] guard_idx(input logic [1:0] g);
+        guard_idx = (g == 2'd0) ? 8'd0
+                  : (g == 2'd1) ? (r0_len - 8'd1)
+                  : (g == 2'd2) ? r0_len
+                                : (total - 8'd1);
+    endfunction
+
+    // ---- the shadow: 64 x 16, LE within the word, ONE writer -------------
+    (* ramstyle = "MLAB, no_rw_check" *) logic [15:0] shadow [0:63];
+
+    // loader words are queued (one deep is plenty: they arrive microseconds
+    // apart) and drained below, so the capture path and the loader are the
+    // same writer block
+    logic        ld_pend;
+    logic  [5:0] ld_pw;
+    logic [15:0] ld_pd;
+
+    // save-side read, registered once so the word holds while the HPS
+    // clocks it out
+    logic [15:0] sv_q;
+    always_ff @(posedge clk) sv_q <= shadow[sv_word];
+    assign sv_data = sv_q;
+
+    // FSM-side byte read of the shadow (its own address = its own port)
+    logic  [7:0] sh_idx;
+    wire  [15:0] sh_word = shadow[sh_idx[6:1]];
+    wire   [7:0] sh_byte = sh_idx[0] ? sh_word[15:8] : sh_word[7:0];
+
+    // even 68k byte address = UPPER lane (UDS)
+    function automatic logic [1:0] lane_of(input logic [16:0] b);
+        lane_of = b[0] ? 2'b01 : 2'b10;
+    endfunction
+
+    // ---- FSM -------------------------------------------------------------
+    typedef enum logic [2:0] { H_IDLE, H_SETTLE, H_GUARD, H_INJ, H_CAP, H_DONE } hst_t;
+    hst_t hst;
+    logic       injected;               // done: the table was written once
+    logic       poll_done;              // done: no (further) poll will help
+    logic       capturing;
+    logic       sh_ok;                  // shadow guards match, so far
+    logic [7:0] idx;
+    logic  [1:0] gph;
+    logic  [7:0] settle;
+    logic  [1:0] rd_ph;                 // 0 present, 1 ram latch, 2 q valid
+    logic        upload_d;
+    logic [15:0] cap_lo;                // capture assembles LE words
+
+    wire [16:0] cur_b = (hst == H_GUARD) ? guard_off(gph) : dump_off(idx);
+
+    always_ff @(posedge clk) begin
+        hs_we    <= 1'b0;
+        upload_d <= ioctl_upload;
+        if (reset) begin
+            hst <= H_IDLE; hs_pause <= 1'b0;
+            injected <= 1'b0; poll_done <= 1'b0; save_ready <= 1'b0;
+            capturing <= 1'b0; ld_pend <= 1'b0; rd_ph <= 2'd0;
+        end else begin
+            // queue a loader word; drain it whenever the FSM is not writing
+            if (ld_wr) begin
+                ld_pend <= 1'b1; ld_pw <= ld_word; ld_pd <= ld_data;
+            end else if (ld_pend && hst != H_CAP) begin
+                shadow[ld_pw] <= ld_pd;
+                ld_pend <= 1'b0;
+            end
+
+            case (hst)
+                H_IDLE: begin
+                    if (ioctl_upload && !upload_d && run) begin
+                        capturing <= 1'b1; idx <= 8'd0; cap_lo <= 16'd0;
+                        hs_pause <= 1'b1; settle <= 8'd64; rd_ph <= 2'd0;
+                        hst <= H_SETTLE;
+                    end else if (run && !poll_done && vbl_rise) begin
+                        capturing <= 1'b0; gph <= 2'd0; sh_ok <= 1'b1;
+                        sh_idx <= guard_idx(2'd0);
+                        hs_pause <= 1'b1; settle <= 8'd64; rd_ph <= 2'd0;
+                        hst <= H_SETTLE;
+                    end
+                end
+                // let any in-flight CPU bus cycle finish before the borrow
+                H_SETTLE: begin
+                    settle <= settle - 8'd1;
+                    if (settle == 0) hst <= capturing ? H_CAP : H_GUARD;
+                end
+                // walk the four guards: RAM byte must match; the shadow's
+                // matching byte decides whether an inject may follow
+                H_GUARD: begin
+                    hs_addr <= cur_b[16:1];
+                    rd_ph   <= (rd_ph == 2'd2) ? 2'd0 : rd_ph + 2'd1;
+                    if (rd_ph == 2'd2) begin
+                        if ((cur_b[0] ? hs_q[7:0] : hs_q[15:8]) != gv[gph]) begin
+                            // not initialised yet: release, retry next vblank
+                            hs_pause <= 1'b0; hst <= H_IDLE;
+                        end else begin
+                            if (sh_byte != gv[gph]) sh_ok <= 1'b0;
+                            if (gph == 2'd3) begin
+                                save_ready <= 1'b1;    // guards seen: saves on
+                                if (sh_ok && (sh_byte == gv[gph]) && !injected) begin
+                                    idx <= 8'd0; sh_idx <= 8'd0; hst <= H_INJ;
+                                end else begin
+                                    poll_done <= 1'b1; hst <= H_DONE;
+                                end
+                            end else begin
+                                gph    <= gph + 2'd1;
+                                sh_idx <= guard_idx(gph + 2'd1);
+                            end
+                        end
+                    end
+                end
+                // write the shadow over the table, one byte-lane write each
+                H_INJ: begin
+                    hs_addr  <= cur_b[16:1];
+                    hs_wdata <= {sh_byte, sh_byte};
+                    hs_be    <= lane_of(cur_b);
+                    hs_we    <= 1'b1;
+                    if (idx == total - 8'd1) begin
+                        injected <= 1'b1; poll_done <= 1'b1; hst <= H_DONE;
+                    end else begin
+                        idx <= idx + 8'd1; sh_idx <= idx + 8'd1;
+                    end
+                end
+                // read the table into the shadow for the upload to stream
+                H_CAP: begin
+                    hs_addr <= cur_b[16:1];
+                    rd_ph   <= (rd_ph == 2'd2) ? 2'd0 : rd_ph + 2'd1;
+                    if (rd_ph == 2'd2) begin
+                        if (!idx[0]) cap_lo[7:0] <= cur_b[0] ? hs_q[7:0] : hs_q[15:8];
+                        else shadow[idx[7:1]] <= {(cur_b[0] ? hs_q[7:0] : hs_q[15:8]), cap_lo[7:0]};
+                        if (idx == total - 8'd1) begin
+                            // an odd total leaves the last byte unpaired
+                            if (!idx[0])
+                                shadow[idx[7:1]] <= {8'd0, cur_b[0] ? hs_q[7:0] : hs_q[15:8]};
+                            hst <= H_DONE;
+                        end else idx <= idx + 8'd1;
+                    end
+                end
+                H_DONE: begin
+                    hs_pause <= 1'b0;
+                    hst <= H_IDLE;
+                end
+                default: hst <= H_IDLE;
+            endcase
+        end
+    end
+
+endmodule

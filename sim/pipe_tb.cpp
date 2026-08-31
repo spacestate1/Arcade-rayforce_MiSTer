@@ -167,6 +167,7 @@ int main(int argc, char** argv) {
     // cycle, LAT after the command -- which is why the RTL fetches a line as
     // ONE 80-beat burst.
     const int DDR_CMD = getenv("F3_DDR_CMD") ? atoi(getenv("F3_DDR_CMD")) : 8;
+    const int DDR_MAXBURST = getenv("F3_DDR_MAXBURST") ? atoi(getenv("F3_DDR_MAXBURST")) : 8;
     int ddr_hold = 0;
     auto ddr_tick = [&]() {
         int busy = ddr_hold > 0 ||
@@ -178,6 +179,13 @@ int main(int argc, char** argv) {
             if (t->ddr_we && a < ddr.size()) { ddr[a] = t->ddr_din; ddr_hold = DDR_CMD; }
             if (t->ddr_rd) {
                 int nb = t->ddr_burstcnt ? t->ddr_burstcnt : 1;
+                // The f2sdram bridge is Avalon-MM and CAPS its burst. Asking
+                // for more returns fewer beats than requested -- which is
+                // exactly what wedged the read FSM on the board (5389 misses
+                // a frame) while a model that honoured any length said the
+                // design was fine. Cap it here so the bench can never again
+                // be more generous than the bridge.
+                if (nb > DDR_MAXBURST) nb = DDR_MAXBURST;
                 for (int i = 0; i < nb; i++)
                     ddr_q.push_back({ddr_cyc + DDR_LAT + i,
                                      (a + i) < ddr.size() ? ddr[a + i] : 0});
