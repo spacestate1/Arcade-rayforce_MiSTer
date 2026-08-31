@@ -128,10 +128,12 @@ module rf_spr_fb
     // lines long, so the first NRB lines are fetched with the mixer nowhere
     // near them.
     localparam int NRB = 4;
-    typedef enum logic [1:0] { R_IDLE, R_REQ, R_WAIT } rst_t;
+    typedef enum logic [2:0] { R_IDLE, R_REQ, R_WAIT, R_DRAIN } rst_t;
     rst_t rst;
     logic  [6:0] r_word;            // words requested
-    logic [11:0] r_to;              // watchdog on a burst that never lands
+    logic [11:0] r_to;              // watchdog on a line that never lands
+    logic  [7:0] r_idle;            // cycles since the last beat arrived
+    logic  [7:0] r_rem;
     logic  [7:0] r_got;             // words returned; see the >= test below
     logic  [8:0] nf;                // next line to fetch (256 = done)
     logic  [1:0] r_fill;            // nf % NRB
@@ -196,22 +198,42 @@ module rf_spr_fb
     // would never get, and the miss counter went to 5389 a frame. Eight is
     // the length every MiSTer bridge accepts, and it still cuts the command
     // count per line by 8x, which was the whole point.
-    // BURSTCNT 1 EVERYWHERE. The f2sdram bridge is Avalon-MM and caps its
-    // burst; a request for 80 returned fewer beats than asked, the wait
-    // state sat waiting for the rest, and the miss counter read 5389 a
-    // frame. Rather than guess the cap -- 8? 16? -- use the one length the
-    // framework itself proves works (screen_rotate has used BURSTCNT=1 on
-    // this port for years) and win the time back where it actually went
-    // missing: READ PRIORITY. 80 commands a line at ~8 cycles each is 640
-    // of a line's 3456, and the reader now takes them ahead of a writer
-    // that has a whole frame of slack.
-    assign ddr_burstcnt = 8'd1;
+    // BURST, AND RE-ISSUE FROM WHAT ACTUALLY ARRIVED.
+    //
+    // Three measurements, all from the board's miss counter (lines composed
+    // without their sprite data), all on the same attract loop:
+    //
+    //   single-word reads, writes first   8777 a frame
+    //   80-beat burst, reads first        5389
+    //   single-word reads, reads first    7937
+    //
+    // So bursting is what buys the bandwidth -- 80 commands a line is too
+    // many however they are prioritised -- and the 80-beat attempt still
+    // failed only because the f2sdram bridge CAPS its burst: it returned
+    // fewer beats than asked and the wait state sat there for the rest.
+    //
+    // The fix: ask for 8 -- under-delivery only happens when a request
+    // EXCEEDS the cap, and no known bridge caps below 8 (MiSTer's own
+    // scaler bursts on this class of port) -- and complete on the BEAT
+    // COUNT, not a timer: when a command's last beat lands, issue the next
+    // chunk immediately. Ten commands a line instead of eighty. The idle
+    // path is only a fallback for a bridge stranger than any known one,
+    // and it DRAINS before re-asking so a straggling beat of the old
+    // command can never land in the new one's slot.
+    localparam int BL = 8;
+    logic [3:0] c_exp, c_got;           // this command's beats: asked, landed
+    always_comb begin
+        r_rem = 8'(WPL) - r_got;
+        c_exp = (r_rem > 8'(BL)) ? 4'(BL) : r_rem[3:0];
+    end
+    assign ddr_burstcnt = (rst == R_REQ) ? 8'(c_exp) : 8'd1;
     assign ddr_be       = 8'hFF;
     assign ddr_rd       = (rst == R_REQ);
     assign ddr_we       = (wst == W_ISSUE) && (rst != R_REQ);
     assign ddr_din      = w_acc;
+    // reads resume from what has actually landed, not from what was asked
     assign ddr_addr     = (rst == R_REQ)
-                        ? (line_word(~par, nf[7:0]) + 29'(r_word))
+                        ? (line_word(~par, nf[7:0]) + 29'(r_got))
                         : (line_word(w_bank, w_line) + 29'(w_word));
 
     always_ff @(posedge clk) begin
@@ -258,12 +280,14 @@ module rf_spr_fb
             case (rst)
                 R_IDLE: if (!nf[8] && (nf < {1'b0, rd_line} + NRB)) begin
                     r_fill <= nf[1:0];
-                    r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; rst <= R_REQ;
+                    r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; r_idle <= 8'd0;
+                    rst <= R_REQ;
                 end
                 // one command per 8 beats; the beats stream back on DOUT
                 R_REQ: if (!ddr_busy) begin
-                    if (r_word == WPL - 1) rst <= R_WAIT;
-                    else r_word <= r_word + 7'd1;
+                    c_got  <= 4'd0;
+                    r_idle <= 8'd0;
+                    rst    <= R_WAIT;
                 end
                 // >=, not the exact cycle the last word lands: with a fast
                 // memory the returns keep pace with the requests and this
@@ -271,17 +295,37 @@ module rf_spr_fb
                 // A short burst must never wedge this: if the beats do not
                 // arrive, give the line up and move on rather than stalling
                 // the window for the rest of the frame.
+                // Beats land on DOUT_READY and bump r_got (below). When they
+                // stop before the line is full, go back and ask for the rest
+                // -- that is what makes any bridge cap self-correcting. r_to
+                // is the outer watchdog: a line that will not come at all is
+                // abandoned rather than stalling the window, and the miss
+                // counter reports it.
                 R_WAIT: begin
-                    r_to <= r_to + 12'd1;
+                    r_to   <= r_to + 12'd1;
+                    r_idle <= ddr_dout_ready ? 8'd0 : r_idle + 8'd1;
+                    if (ddr_dout_ready) c_got <= c_got + 4'd1;
                     if (r_got >= WPL) begin
                         buf_line[r_fill] <= nf[7:0];
                         buf_ok[r_fill]   <= 1'b1;
                         nf               <= nf + 9'd1;
                         rst              <= R_IDLE;
+                    end else if (ddr_dout_ready && c_got == c_exp - 4'd1) begin
+                        rst <= R_REQ;           // chunk complete: next one now
                     end else if (&r_to) begin
-                        nf  <= nf + 9'd1;       // skip it; the miss counter says
+                        nf  <= nf + 9'd1;       // the line is not coming
                         rst <= R_IDLE;
+                    end else if (r_idle == 8'd64 && c_got != 4'd0) begin
+                        rst <= R_DRAIN;         // short burst: fallback
                     end
+                end
+                // quiet the port before re-asking, so a late beat of the
+                // old command cannot land in the new one's slot
+                R_DRAIN: begin
+                    r_to   <= r_to + 12'd1;
+                    r_idle <= ddr_dout_ready ? 8'd0 : r_idle + 8'd1;
+                    if (&r_to)                 begin nf <= nf + 9'd1; rst <= R_IDLE; end
+                    else if (r_idle == 8'd128) rst <= R_REQ;
                 end
                 default: rst <= R_IDLE;
             endcase
