@@ -85,6 +85,17 @@ module rf_spr_fb
     localparam logic [28:0] FB_BASE  = 29'h0600_0000;
     localparam int          WPL      = 80;          // 64-bit words per line
     localparam int          WPB      = 256 * WPL;   // words per frame bank
+    // One checksum word per line, stored after both pixel banks. The read
+    // side VERIFIES every line before the mixer may see it: three port
+    // policies produced the same shredded screen while the same-instant
+    // /dev/mem dump showed the stored image perfect, so whatever the real
+    // port does to the returning stream, the answer is to stop trusting it.
+    // A line whose checksum fails is refetched; the mixer only ever
+    // composes verified data or a counted, empty line.
+    localparam logic [28:0] CRC_BASE = FB_BASE + 29'(2 * WPB);
+    function automatic logic [28:0] crc_word(input logic b, input logic [7:0] l);
+        crc_word = CRC_BASE + 29'({b, l});
+    endfunction
 
     // word index of (bank, line): bank*WPB + line*80, and 80 = 64 + 16 so
     // the multiply is two shifts and an add
@@ -99,13 +110,15 @@ module rf_spr_fb
     // is the line buffer's read latency. Collapsing the two (capturing in the
     // same state that advances the address) shifts every pixel by one and
     // wraps the last of each word into the next.
-    typedef enum logic [1:0] { W_IDLE, W_RD, W_CAP, W_ISSUE } wst_t;
+    typedef enum logic [2:0] { W_IDLE, W_RD, W_CAP, W_ISSUE, W_CRC } wst_t;
     wst_t wst;
     logic  [6:0] w_word;            // 0..79
     logic  [1:0] w_pix;             // which of the four
     logic [63:0] w_acc;
+    logic [63:0] w_sum;                 // running XOR of the line's words
     logic  [7:0] w_line;
     logic        w_bank;
+    logic        w_crc;                 // the CRC word is on the bus
 
     assign wr_busy = (wst != W_IDLE);
     assign lb_addr = 9'({w_word, 2'd0}) + 9'(w_pix);
@@ -128,11 +141,13 @@ module rf_spr_fb
     // lines long, so the first NRB lines are fetched with the mixer nowhere
     // near them.
     localparam int NRB = 4;
-    typedef enum logic [2:0] { R_IDLE, R_REQ, R_WAIT, R_DRAIN } rst_t;
+    typedef enum logic [2:0] { R_IDLE, R_REQ, R_WAIT, R_CRC, R_VERIFY, R_DRAIN } rst_t;
     rst_t rst;
     logic  [6:0] r_word;            // words requested
     logic [11:0] r_to;              // watchdog on a line that never lands
     logic  [9:0] r_idle;            // cycles since the last beat arrived
+    logic [63:0] r_sum;             // running XOR of the received words
+    logic  [1:0] r_try;             // verification attempts for this line
     logic  [7:0] r_rem;
     logic  [7:0] r_got;             // words returned; see the >= test below
     logic  [8:0] nf;                // next line to fetch (256 = done)
@@ -155,16 +170,32 @@ module rf_spr_fb
     // This is the direct successor of SPRLINE's late-line count: the same
     // question -- did the sprite data arrive in time -- for the new
     // mechanism. It must stay at zero.
+    // A miss is counted only when it could have shown: the framebuffer must
+    // have been primed (one whole frame written), and the line must still be
+    // absent 512 cycles after the mixer moved onto it. Counting at the
+    // transition instant scored the benign 255->0 wrap once every frame, and
+    // counting before priming scored every boot frame 256 -- together they
+    // buried the real signal under ~8000 counts and made SPRLINE's FAIL
+    // unreadable for a whole day of builds.
     logic  [7:0] rd_line_q;
+    logic  [9:0] line_age;
+    logic        primed;
     always_ff @(posedge clk) begin
         rd_line_q <= rd_line;
-        if (reset || frame_start) miss <= 16'd0;
-        else if (rd_line != rd_line_q && !rd_hit && miss != 16'hFFFF)
-            miss <= miss + 16'd1;
+        if (reset) primed <= 1'b0;
+        else if (frame_start && nf[8]) primed <= 1'b1;
+        if (reset || frame_start) begin
+            miss <= 16'd0; line_age <= 10'd0;
+        end else begin
+            if (rd_line != rd_line_q) line_age <= 10'd0;
+            else if (!(&line_age))    line_age <= line_age + 10'd1;
+            if (primed && line_age == 10'd512 && !rd_hit && miss != 16'hFFFF)
+                miss <= miss + 16'd1;
+        end
     end
 
     always_ff @(posedge clk) begin
-        if (ddr_dout_ready && rst != R_IDLE) begin
+        if (ddr_dout_ready && rst != R_IDLE && rst != R_CRC && rst != R_VERIFY) begin
             lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd0] <= ddr_dout[15:0];
             lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd1] <= ddr_dout[31:16];
             lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd2] <= ddr_dout[47:32];
@@ -243,19 +274,21 @@ module rf_spr_fb
         r_rem = 8'(WPL) - {1'b0, r_word};
         c_exp = (r_rem > 8'(BL)) ? 4'(BL) : r_rem[3:0];
     end
-    assign ddr_burstcnt = ddr_rd ? 8'(c_exp) : 8'd1;
+    assign ddr_burstcnt = (ddr_rd && rst == R_REQ) ? 8'(c_exp) : 8'd1;
     assign ddr_be       = 8'hFF;
-    wire   rd_want      = (rst == R_REQ);
-    wire   wr_want      = (wst == W_ISSUE);
+    wire   rd_want      = (rst == R_REQ) || (rst == R_CRC);
+    wire   wr_want      = (wst == W_ISSUE) || (wst == W_CRC);
     assign ddr_rd       = rd_want && (rw_tog  || !wr_want);
     assign ddr_we       = wr_want && (!rw_tog || !rd_want);
-    assign ddr_din      = w_acc;
+    assign ddr_din      = w_crc ? w_sum : w_acc;
     // reads resume from what has actually landed, not from what was asked
     // read commands use the PLANNED cursor (r_word): they pipeline ahead of
     // the returning beats, which land at r_got independently
     assign ddr_addr     = ddr_rd
-                        ? (line_word(~par, nf[7:0]) + 29'(r_word))
-                        : (line_word(w_bank, w_line) + 29'(w_word));
+                        ? (rst == R_CRC ? crc_word(~par, nf[7:0])
+                                        : (line_word(~par, nf[7:0]) + 29'(r_word)))
+                        : (w_crc ? crc_word(w_bank, w_line)
+                                 : (line_word(w_bank, w_line) + 29'(w_word)));
 
     always_ff @(posedge clk) begin
         if (!ddr_busy) begin
@@ -279,7 +312,7 @@ module rf_spr_fb
             case (wst)
                 W_IDLE: if (wr_req) begin
                     w_line <= wr_line; w_bank <= par;
-                    w_word <= 0; w_pix <= 0;
+                    w_word <= 0; w_pix <= 0; w_sum <= 64'd0; w_crc <= 1'b0;
                     wst <= W_RD;
                 end
                 // lb_q is valid one clock after lb_addr, so shift the pixel
@@ -294,8 +327,13 @@ module rf_spr_fb
                 // (a pending read command masks ddr_we)
                 W_ISSUE: if (!ddr_busy && ddr_we) begin
                     w_pix <= 2'd0;
-                    if (w_word == WPL - 1) wst <= W_IDLE;
+                    w_sum <= w_sum ^ w_acc;
+                    if (w_word == WPL - 1) begin w_crc <= 1'b1; wst <= W_CRC; end
                     else begin w_word <= w_word + 7'd1; wst <= W_RD; end
+                end
+                W_CRC: if (!ddr_busy && ddr_we) begin
+                    w_crc <= 1'b0;
+                    wst   <= W_IDLE;
                 end
                 default: wst <= W_IDLE;
             endcase
@@ -307,6 +345,7 @@ module rf_spr_fb
                 R_IDLE: if (!nf[8] && (nf < {1'b0, rd_line} + NRB)) begin
                     r_fill <= nf[1:0];
                     r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; r_idle <= 10'd0;
+                    r_sum <= 64'd0; r_try <= 2'd0;
                     rst <= R_REQ;
                 end
                 // one command per 8 beats; the beats stream back on DOUT
@@ -331,10 +370,8 @@ module rf_spr_fb
                     r_to   <= r_to + 12'd1;
                     r_idle <= ddr_dout_ready ? 10'd0 : r_idle + 10'd1;
                     if (r_got >= WPL) begin
-                        buf_line[r_fill] <= nf[7:0];
-                        buf_ok[r_fill]   <= 1'b1;
-                        nf               <= nf + 9'd1;
-                        rst              <= R_IDLE;
+                        r_idle <= 10'd0;
+                        rst    <= R_CRC;
                     end else if (&r_to) begin
                         nf  <= nf + 9'd1;       // the line is not coming
                         rst <= R_IDLE;
@@ -344,6 +381,39 @@ module rf_spr_fb
                     // fired on every line and the retry loop ate the frame.
                     end else if (r_idle == 10'd1000) begin
                         rst <= R_DRAIN;         // under-delivery: start over
+                    end
+                end
+                // fetch the line's stored checksum (a single read)
+                R_CRC: begin
+                    r_to <= r_to + 12'd1;
+                    if (!ddr_busy && ddr_rd) rst <= R_VERIFY;
+                    if (&r_to) begin nf <= nf + 9'd1; rst <= R_IDLE; end
+                end
+                // The line is published ONLY when its content proves itself.
+                // A mismatch means the port did something to the stream --
+                // which three builds' worth of shredded screens say it does
+                // -- so the line refetches, up to three tries, and an
+                // unprovable line stays out of the window and is counted.
+                R_VERIFY: begin
+                    r_to   <= r_to + 12'd1;
+                    r_idle <= r_idle + 10'd1;
+                    if (ddr_dout_ready) begin
+                        if (ddr_dout == r_sum) begin
+                            buf_line[r_fill] <= nf[7:0];
+                            buf_ok[r_fill]   <= 1'b1;
+                            nf               <= nf + 9'd1;
+                            rst              <= R_IDLE;
+                        end else if (r_try != 2'd3) begin
+                            r_try <= r_try + 2'd1;
+                            r_word <= 0; r_got <= 8'd0; r_sum <= 64'd0;
+                            r_idle <= 10'd0;
+                            rst    <= R_REQ;
+                        end else begin
+                            nf  <= nf + 9'd1;   // unprovable: skip, count
+                            rst <= R_IDLE;
+                        end
+                    end else if (&r_to || r_idle == 10'd1000) begin
+                        nf <= nf + 9'd1; rst <= R_IDLE;
                     end
                 end
                 // quiet the port before re-asking, so a late beat of the
@@ -356,12 +426,15 @@ module rf_spr_fb
                     r_idle <= ddr_dout_ready ? 10'd0 : r_idle + 10'd1;
                     if (&r_to) begin nf <= nf + 9'd1; rst <= R_IDLE; end
                     else if (r_idle == 10'd300) begin
-                        r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
+                        r_word <= 0; r_got <= 8'd0; r_sum <= 64'd0; rst <= R_REQ;
                     end
                 end
                 default: rst <= R_IDLE;
             endcase
-            if (ddr_dout_ready && rst != R_IDLE) r_got <= r_got + 8'd1;
+            if (ddr_dout_ready && rst != R_IDLE && rst != R_CRC && rst != R_VERIFY) begin
+                r_got <= r_got + 8'd1;
+                r_sum <= r_sum ^ ddr_dout;
+            end
         end
     end
 

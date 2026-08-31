@@ -157,7 +157,8 @@ int main(int argc, char** argv) {
     const uint32_t DDR_BASE = 0x06000000;          // 0x30000000 in bytes
     const int DDR_LAT    = getenv("F3_DDR_LAT")  ? atoi(getenv("F3_DDR_LAT"))  : 40;
     const int DDR_BUSY_N = getenv("F3_DDR_BUSY") ? atoi(getenv("F3_DDR_BUSY")) : 7;
-    std::vector<uint64_t> ddr(2 * 256 * 80, 0);
+    // pixel banks + the per-line checksum words after them
+    std::vector<uint64_t> ddr(2 * 256 * 80 + 2 * 256, 0);
     std::deque<std::pair<long long, uint64_t>> ddr_q;   // (ready cycle, data)
     long long ddr_cyc = 0;
     // Every command costs DDR_CMD cycles of BUSY before the next is taken --
@@ -168,6 +169,13 @@ int main(int argc, char** argv) {
     // ONE 80-beat burst.
     const int DDR_CMD = getenv("F3_DDR_CMD") ? atoi(getenv("F3_DDR_CMD")) : 8;
     const int DDR_MAXBURST = getenv("F3_DDR_MAXBURST") ? atoi(getenv("F3_DDR_MAXBURST")) : 8;
+    // Corrupt every Nth read beat (0 = off). The board delivers a shredded
+    // screen from a framebuffer the /dev/mem dump proves is stored PERFECT,
+    // so the returning stream is being damaged in a way no clean model can
+    // reproduce. The checksum path must make even a lying port render
+    // exactly -- this knob is how the bench proves it does.
+    const int DDR_CORRUPT = getenv("F3_DDR_CORRUPT") ? atoi(getenv("F3_DDR_CORRUPT")) : 0;
+    long long rd_beats = 0;
     int ddr_hold = 0;
     auto ddr_tick = [&]() {
         int busy = ddr_hold > 0 ||
@@ -194,7 +202,9 @@ int main(int argc, char** argv) {
         }
         t->ddr_dout_ready = 0;
         if (!ddr_q.empty() && ddr_q.front().first <= ddr_cyc) {
-            t->ddr_dout = ddr_q.front().second;
+            uint64_t v = ddr_q.front().second;
+            if (DDR_CORRUPT && (++rd_beats % DDR_CORRUPT) == 0) v ^= 0xFFFF;
+            t->ddr_dout = v;
             t->ddr_dout_ready = 1;
             ddr_q.pop_front();
         }
