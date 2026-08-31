@@ -758,12 +758,29 @@ end
 //
 // 64 words, big-endian in the file: the loader's 16-bit word arrives
 // little-endian, so both directions swap the lanes.
-wire        nv_wr = ioctl_wr && (ioctl_index == 8'd254);
+wire        hs_pause, hs_ram_we, hs_save_ready;
+wire [15:0] hs_ram_addr, hs_ram_wdata, hs_ram_q;
+wire  [1:0] hs_ram_be;
+rf_hiscore hiscore (
+    .clk(clk_sys), .reset(cpu_reset),
+    .game_id(cfg_game), .run(~cpu_reset), .vbl_rise(vbl_rise),
+    .ld_wr(hs_ld_wr), .ld_word(ioctl_addr[6:1]), .ld_data(ioctl_dout),
+    .sv_word(ioctl_addr[6:1]), .sv_data(hs_sv_data), .ioctl_upload(ioctl_upload),
+    .hs_pause(hs_pause), .hs_addr(hs_ram_addr), .hs_wdata(hs_ram_wdata),
+    .hs_be(hs_ram_be), .hs_we(hs_ram_we), .hs_q(hs_ram_q),
+    .save_ready(hs_save_ready)
+);
+// The 256-byte blob splits: bytes 0-127 the EEPROM, 128-255 the high-score
+// snapshot (rf_hiscore). ioctl_addr[7] is the divider, both directions.
+wire        nv_wr = ioctl_wr && (ioctl_index == 8'd254) && !ioctl_addr[7];
+wire        hs_ld_wr = ioctl_wr && (ioctl_index == 8'd254) && ioctl_addr[7];
 wire  [5:0] nv_addr = ioctl_addr[6:1];
 wire [15:0] nv_data = {ioctl_dout[7:0], ioctl_dout[15:8]};
 wire [15:0] nv_sv_data;
 wire        nv_wrote;
-assign      nv_din  = {nv_sv_data[7:0], nv_sv_data[15:8]};
+wire [15:0] hs_sv_data;
+assign      nv_din  = ioctl_addr[7] ? hs_sv_data
+                                    : {nv_sv_data[7:0], nv_sv_data[15:8]};
 
 // Ask for a save once the game has changed a word, and stay asking until
 // MiSTer has taken it: hps_io latches the RISING edge, so the request is
@@ -773,7 +790,7 @@ logic ioctl_upload_d;
 always_ff @(posedge clk_sys) begin
     ioctl_upload_d <= ioctl_upload;
     if (reset) nv_save_req <= 1'b0;
-    else if (nv_wrote) nv_save_req <= 1'b1;
+    else if (nv_wrote || hs_save_ready) nv_save_req <= 1'b1;
     else if (ioctl_upload_d && !ioctl_upload) nv_save_req <= 1'b0;
 end
 
@@ -789,6 +806,8 @@ rf_main main
     .pause(pause_eff),
     .test_sw(status[2]),
     .nv_wr(nv_wr), .nv_addr(nv_addr), .nv_data(nv_data),
+    .hs_pause(hs_pause), .hs_addr(hs_ram_addr), .hs_wdata(hs_ram_wdata),
+    .hs_be(hs_ram_be), .hs_we(hs_ram_we), .hs_q(hs_ram_q),
     .nv_sv_addr(ioctl_addr[6:1]), .nv_sv_data(nv_sv_data), .nv_wrote(nv_wrote),
 
     .ctrl0(vctrl0), .ctrl1(vctrl1),

@@ -163,8 +163,16 @@ module rf_hiscore
             injected <= 1'b0; poll_done <= 1'b0; save_ready <= 1'b0;
             capturing <= 1'b0; ld_pend <= 1'b0; rd_ph <= 2'd0;
         end else begin
-            // queue a loader word; drain it whenever the FSM is not writing
-            if (ld_wr) begin
+            // Loader words write the shadow directly unless a capture is
+            // mid-flight (H_CAP is the only other shadow writer); then one
+            // is queued and drained after. Writing only via the queue
+            // dropped every word but the last under back-to-back input --
+            // the bench's loader is gapless even though MiSTer's is not,
+            // and a mechanism that only works because the input is slow is
+            // not a mechanism.
+            if (ld_wr && hst != H_CAP) begin
+                shadow[ld_word] <= ld_data;
+            end else if (ld_wr) begin
                 ld_pend <= 1'b1; ld_pw <= ld_word; ld_pd <= ld_data;
             end else if (ld_pend && hst != H_CAP) begin
                 shadow[ld_pw] <= ld_pd;

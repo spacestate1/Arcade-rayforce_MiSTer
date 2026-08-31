@@ -204,21 +204,25 @@ module rf_spr_fb
     // counting before priming scored every boot frame 256 -- together they
     // buried the real signal under ~8000 counts and made SPRLINE's FAIL
     // unreadable for a whole day of builds.
+    // END-OF-LINE verdict: a line is a miss only if its sprites were NEVER
+    // present while the mixer was on it. The previous version sampled 512
+    // cycles in and scored lines whose fetch completed later in their own
+    // period -- a ~2/frame over-count on a screen proven solid, keeping
+    // SPRLINE red with nothing wrong. hit_seen goes sticky the first cycle
+    // the line is present; the verdict lands when the mixer moves on.
     logic  [7:0] rd_line_q;
-    logic  [9:0] line_age;
-    logic        primed;
+    logic        primed, hit_seen;
     always_ff @(posedge clk) begin
         rd_line_q <= rd_line;
         if (reset) primed <= 1'b0;
         else if (frame_start && nf[8]) primed <= 1'b1;
         if (reset || frame_start) begin
-            miss <= 16'd0; line_age <= 10'd0;
-        end else begin
-            if (rd_line != rd_line_q) line_age <= 10'd0;
-            else if (!(&line_age))    line_age <= line_age + 10'd1;
-            if (primed && line_age == 10'd512 && !rd_hit && miss != 16'hFFFF)
+            miss <= 16'd0; hit_seen <= 1'b0;
+        end else if (rd_line != rd_line_q) begin
+            if (primed && !hit_seen && !rd_hit && miss != 16'hFFFF)
                 miss <= miss + 16'd1;
-        end
+            hit_seen <= rd_hit;
+        end else if (rd_hit) hit_seen <= 1'b1;
     end
 
     always_ff @(posedge clk) begin

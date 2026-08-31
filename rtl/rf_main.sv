@@ -70,6 +70,14 @@ module rf_main
     //   Start=[10] Coin=[11] Service=[12]
     input  logic [15:0] j0,
     input  logic        pause,          // hold the CPU (MiSTer Pause button)
+    // rf_hiscore borrows the CPU's RAM port while hs_pause holds clkena --
+    // the same freeze the OSD Pause uses, a few microseconds at a time
+    input  logic        hs_pause,
+    input  logic [15:0] hs_addr,
+    input  logic [15:0] hs_wdata,
+    input  logic  [1:0] hs_be,
+    input  logic        hs_we,
+    output logic [15:0] hs_q,
     input  logic [15:0] j1,
     input  logic        test_sw,        // cabinet TEST switch (OSD toggle)
 
@@ -180,7 +188,7 @@ module rf_main
                     rom_wait <= 1'b0;
                     clkena   <= 1'b1;
                 end
-            end else if (!clkena && !pause) begin
+            end else if (!clkena && !pause && !hs_pause) begin
                 // pause: no further clock enables, so the CPU freezes between
                 // bus cycles (a ROM fetch in flight still completes above)
                 if (sel_rom && (busstate == 2'b00 || busstate == 2'b10)) begin
@@ -479,9 +487,18 @@ module rf_main
     // hang off those, so they are not worth disturbing.
 
     // CPU-only memories: simple dual port is enough.
+    // While rf_hiscore holds hs_pause the CPU's clkena is suppressed, so it
+    // neither writes (wren needs clkena) nor latches a read -- the mux is
+    // invisible to it. hs_q shares the read port; the CPU's combinational
+    // raddr is re-presented the cycle the mux drops back.
     rf_bram_be #(.AW(16)) u_ram (
-        .clk(clk), .waddr(a[16:1]), .wdata(cpu_dout),
-        .wren(cpu_wr && sel_ram && clkena), .be(be), .raddr(a[16:1]), .q(ram_q));
+        .clk(clk),
+        .waddr(hs_pause ? hs_addr : a[16:1]),
+        .wdata(hs_pause ? hs_wdata : cpu_dout),
+        .wren(hs_pause ? hs_we : (cpu_wr && sel_ram && clkena)),
+        .be(hs_pause ? hs_be : be),
+        .raddr(hs_pause ? hs_addr : a[16:1]), .q(ram_q));
+    assign hs_q = ram_q;
 
     rf_bram_be #(.AW(13)) u_pfx (
         .clk(clk), .waddr(a[13:1]), .wdata(cpu_dout),
