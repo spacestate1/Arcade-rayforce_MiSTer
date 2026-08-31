@@ -132,7 +132,7 @@ module rf_spr_fb
     rst_t rst;
     logic  [6:0] r_word;            // words requested
     logic [11:0] r_to;              // watchdog on a line that never lands
-    logic  [7:0] r_idle;            // cycles since the last beat arrived
+    logic  [9:0] r_idle;            // cycles since the last beat arrived
     logic  [7:0] r_rem;
     logic  [7:0] r_got;             // words returned; see the >= test below
     logic  [8:0] nf;                // next line to fetch (256 = done)
@@ -221,23 +221,49 @@ module rf_spr_fb
     // and it DRAINS before re-asking so a straggling beat of the old
     // command can never land in the new one's slot.
     localparam int BL = 8;
-    logic [3:0] c_exp, c_got;           // this command's beats: asked, landed
+    // Chunk commands are PIPELINED: each issues as soon as the port takes
+    // the previous one, with PLANNED addresses (r_word walks the line), so a
+    // line pays the DDR3 latency once, not once per chunk -- waiting for
+    // each chunk's beats before asking again cost 20 x latency on a slow
+    // port. The beat count is only the END-of-line verdict: if fewer beats
+    // landed than were asked, the ones that did arrive may sit in the wrong
+    // slots, so the whole line is refetched from zero after a drain --
+    // never patched.
+    logic [3:0] c_exp;                  // beats the next command asks for
+    // STRICT ALTERNATION between read and write commands. Three boards'
+    // worth of evidence says absolute priority starves the other side:
+    // writes-first shredded the SCREEN (reads starved: 8777 misses) and
+    // reads-first shredded the STORED image (writes starved -- the
+    // /dev/mem dump grew horizontal tears it never had before). Neither
+    // side needs more than a fraction of the port; each just needs a
+    // bounded wait. A toggle gives both at least every other slot -- the
+    // same fix, for the same reason, as ch4/ch7 in rf_sdram.
+    logic rw_tog;                       // 1: reads have first refusal
     always_comb begin
-        r_rem = 8'(WPL) - r_got;
+        r_rem = 8'(WPL) - {1'b0, r_word};
         c_exp = (r_rem > 8'(BL)) ? 4'(BL) : r_rem[3:0];
     end
-    assign ddr_burstcnt = (rst == R_REQ) ? 8'(c_exp) : 8'd1;
+    assign ddr_burstcnt = ddr_rd ? 8'(c_exp) : 8'd1;
     assign ddr_be       = 8'hFF;
-    assign ddr_rd       = (rst == R_REQ);
-    assign ddr_we       = (wst == W_ISSUE) && (rst != R_REQ);
+    wire   rd_want      = (rst == R_REQ);
+    wire   wr_want      = (wst == W_ISSUE);
+    assign ddr_rd       = rd_want && (rw_tog  || !wr_want);
+    assign ddr_we       = wr_want && (!rw_tog || !rd_want);
     assign ddr_din      = w_acc;
     // reads resume from what has actually landed, not from what was asked
-    assign ddr_addr     = (rst == R_REQ)
-                        ? (line_word(~par, nf[7:0]) + 29'(r_got))
+    // read commands use the PLANNED cursor (r_word): they pipeline ahead of
+    // the returning beats, which land at r_got independently
+    assign ddr_addr     = ddr_rd
+                        ? (line_word(~par, nf[7:0]) + 29'(r_word))
                         : (line_word(w_bank, w_line) + 29'(w_word));
 
     always_ff @(posedge clk) begin
+        if (!ddr_busy) begin
+            if (ddr_rd) rw_tog <= 1'b0;         // a read went: writes next
+            if (ddr_we) rw_tog <= 1'b1;         // a write went: reads next
+        end
         if (reset) begin
+            rw_tog <= 1'b1;
             wst <= W_IDLE; rst <= R_IDLE;
             r_fill <= 2'd0; buf_ok <= '0; nf <= 9'd0;
             for (int b = 0; b < NRB; b++) buf_line[b] <= 8'd0;
@@ -280,14 +306,14 @@ module rf_spr_fb
             case (rst)
                 R_IDLE: if (!nf[8] && (nf < {1'b0, rd_line} + NRB)) begin
                     r_fill <= nf[1:0];
-                    r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; r_idle <= 8'd0;
+                    r_word <= 0; r_got <= 8'd0; r_to <= 12'd0; r_idle <= 10'd0;
                     rst <= R_REQ;
                 end
                 // one command per 8 beats; the beats stream back on DOUT
-                R_REQ: if (!ddr_busy) begin
-                    c_got  <= 4'd0;
-                    r_idle <= 8'd0;
-                    rst    <= R_WAIT;
+                R_REQ: if (!ddr_busy && ddr_rd) begin
+                    r_idle <= 10'd0;
+                    if (8'({1'b0, r_word}) + 8'(c_exp) >= 8'(WPL)) rst <= R_WAIT;
+                    else r_word <= r_word + 7'(c_exp);
                 end
                 // >=, not the exact cycle the last word lands: with a fast
                 // memory the returns keep pace with the requests and this
@@ -303,29 +329,35 @@ module rf_spr_fb
                 // counter reports it.
                 R_WAIT: begin
                     r_to   <= r_to + 12'd1;
-                    r_idle <= ddr_dout_ready ? 8'd0 : r_idle + 8'd1;
-                    if (ddr_dout_ready) c_got <= c_got + 4'd1;
+                    r_idle <= ddr_dout_ready ? 10'd0 : r_idle + 10'd1;
                     if (r_got >= WPL) begin
                         buf_line[r_fill] <= nf[7:0];
                         buf_ok[r_fill]   <= 1'b1;
                         nf               <= nf + 9'd1;
                         rst              <= R_IDLE;
-                    end else if (ddr_dout_ready && c_got == c_exp - 4'd1) begin
-                        rst <= R_REQ;           // chunk complete: next one now
                     end else if (&r_to) begin
                         nf  <= nf + 9'd1;       // the line is not coming
                         rst <= R_IDLE;
-                    end else if (r_idle == 8'd64 && c_got != 4'd0) begin
-                        rst <= R_DRAIN;         // short burst: fallback
+                    // The threshold must exceed the port's WORST first-beat
+                    // latency or a slow read is mistaken for a short one --
+                    // at a modelled 400-cycle latency a 255-cycle threshold
+                    // fired on every line and the retry loop ate the frame.
+                    end else if (r_idle == 10'd1000) begin
+                        rst <= R_DRAIN;         // under-delivery: start over
                     end
                 end
                 // quiet the port before re-asking, so a late beat of the
                 // old command cannot land in the new one's slot
+                // quiet the port, then refetch the WHOLE line: after an
+                // under-delivered chunk the later beats sat in wrong slots,
+                // so nothing already received can be trusted
                 R_DRAIN: begin
                     r_to   <= r_to + 12'd1;
-                    r_idle <= ddr_dout_ready ? 8'd0 : r_idle + 8'd1;
-                    if (&r_to)                 begin nf <= nf + 9'd1; rst <= R_IDLE; end
-                    else if (r_idle == 8'd128) rst <= R_REQ;
+                    r_idle <= ddr_dout_ready ? 10'd0 : r_idle + 10'd1;
+                    if (&r_to) begin nf <= nf + 9'd1; rst <= R_IDLE; end
+                    else if (r_idle == 10'd300) begin
+                        r_word <= 0; r_got <= 8'd0; rst <= R_REQ;
+                    end
                 end
                 default: rst <= R_IDLE;
             endcase
