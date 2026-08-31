@@ -162,16 +162,36 @@ module rf_spr_fb
     logic  [7:0] buf_line [0:NRB-1];
     logic [NRB-1:0] buf_ok;
 
-    (* ramstyle = "M10K" *) logic [15:0] lbuf [0:NRB-1][0:511];
+    // ONE rf_bram, 64 bits wide, addressed {slot, word}. This buffer was a
+    // 2-D array (lbuf[slot][pixel]) and Quartus SILENTLY DID NOT INFER IT AS
+    // RAM -- it is absent from the Fitter RAM Summary -- so the hardware
+    // read back a degenerate structure while Verilator modelled the array
+    // perfectly. That one divergence survived FIVE FSM redesigns, because
+    // the corruption was never in the FSM: sim exact, screen striped, and
+    // the same-instant DDR3 dump solid. The codebase already carries this
+    // exact lesson ("can't infer memory for variable..."), which is why
+    // rf_bram exists; this module now uses it like everything else does.
+    // 64-bit words also mean ONE write per DDR beat instead of four pixel
+    // writes in one cycle -- the very thing that forced the array shape.
     wire  [2:0] rd_sel = rd_line[2:0];
     wire        rd_hit = buf_ok[rd_sel] && (buf_line[rd_sel] == rd_line);
-    logic [15:0] rd_q;
+    logic [63:0] lb_rq;
+    logic  [1:0] rd_lane_q;
     logic        rd_hit_q;
     always_ff @(posedge clk) begin
-        rd_q     <= lbuf[rd_sel][rd_x];
-        rd_hit_q <= rd_hit;
+        rd_lane_q <= rd_x[1:0];
+        rd_hit_q  <= rd_hit;
     end
-    assign rd_color = rd_hit_q ? rd_q : 16'd0;
+    assign rd_color = rd_hit_q ? lb_rq[16*rd_lane_q +: 16] : 16'd0;
+
+    logic        lb_we;
+    logic  [9:0] lb_wa;
+    logic [63:0] lb_wd;
+    rf_bram #(.WIDTH(64), .AW(10)) u_lwin (
+        .clk(clk),
+        .waddr(lb_wa), .wdata(lb_wd), .wren(lb_we),
+        .raddr({rd_sel, rd_x[8:2]}), .q(lb_rq)
+    );
 
     // How many lines the mixer composed without their sprites being ready.
     // This is the direct successor of SPRLINE's late-line count: the same
@@ -202,11 +222,11 @@ module rf_spr_fb
     end
 
     always_ff @(posedge clk) begin
+        lb_we <= 1'b0;
         if (ddr_dout_ready && rst != R_IDLE && rst != R_CRC && rst != R_VERIFY) begin
-            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd0] <= ddr_dout[15:0];
-            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd1] <= ddr_dout[31:16];
-            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd2] <= ddr_dout[47:32];
-            lbuf[r_fill][{r_got[6:0], 2'd0} + 9'd3] <= ddr_dout[63:48];
+            lb_we <= 1'b1;
+            lb_wa <= {r_fill, r_got[6:0]};
+            lb_wd <= ddr_dout;
         end
     end
 
