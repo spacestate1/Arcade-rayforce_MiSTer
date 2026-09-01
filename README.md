@@ -19,6 +19,9 @@ and listed under [Other F3 games](#other-f3-games) rather than guessed at.
 | **Gunlock** (World) | **~85 %** | Same board and the same ROMs bar one program chip, so everything above should apply — but the MRA has never been loaded on a board. Untested, not unlikely. |
 | **Ray Force** (Japan) | **~85 %** | As Gunlock. |
 | *Elevator Action Returns* | **~80 %** | **Runs** — boots, plays, sprites and playfields draw, sound CPU streaming, one vblank ack per frame. All ten sampled frames match MAME pixel for pixel across the full 232-line visarea, five of them dumped after the fixes as an out-of-sample check. Still in `releases/experimental/`: the pivot layer is a mirror, ten frames of attract and character select are not a playthrough, and its sound has never been correlated. |
+| *Bubble Bobble II* | **~65 %** | **Runs on hardware** (2026-08-31) with no RTL change at all — an MRA and a config byte, which is what the universal F3 map was built for. Title, character select, cutscenes and play all draw correctly. Not frame-verified: the reference model itself is only exact on 3 of 10 dumped frames for this game, so there is nothing trustworthy to check the RTL against yet. |
+| *Bubble Memories* | **~40 %** | **MRA written and assembles** to the same 18.5 MB stream, all ten self-test expectations measured — but it has never been loaded on a board. Its sprites carry no `sprites_hi` ROM (4bpp where every other set is 6bpp), and the reference model renders three of its frames pixel-identical, so that path at least looks right. |
+| *Puzzle Bobble 2* | **~35 %** | **Boots and renders wrong.** Sprites, palettes and text are correct; the playfield is truncated because it is an `extend=0` game (eight 32x32 tilemaps) and that geometry, though implemented and verified, is compiled out for want of ~116 LABs. Fixing the LAB budget turns this one on, along with Darius Gaiden's whole tier. |
 
 Percentages are judgement, not arithmetic; the rows either side of them are
 the evidence.
@@ -281,15 +284,54 @@ writes 0 to that last one, so it costs nothing here.
 
 ## How to use it
 
-1. Copy `releases/Rayforce_20260828.rbf` to `/media/fat/_Arcade/cores/` on the
-   MiSTer SD card.
-2. Copy the `.mra` you want from `releases/` to `/media/fat/_Arcade/`.
-   (`releases/experimental/` is work in progress and does not boot — see the
-   README in there.)
-3. Put the MAME ROM zip in `/media/fat/games/mame/`. The MRAs accept
-   `rayforce.zip` or `gunlock.zip` — parts are matched **by CRC**, so the
-   layout inside the zip does not matter.
+One bitstream runs every game below. The MRA picks the game; you never swap
+cores.
+
+1. Copy `releases/Rayforce_20260831.rbf` to `/media/fat/_Arcade/cores/` on
+   the MiSTer SD card.
+2. Copy the `.mra` files you want to `/media/fat/_Arcade/`.
+3. Put the matching MAME ROM zips in `/media/fat/games/mame/`. Parts are
+   matched **by CRC**, so the layout inside a zip does not matter and a
+   merged set is fine.
 4. Pick the game from the MiSTer arcade menu.
+
+### Games, and what each needs
+
+Every one of these runs on the same `.rbf`. "Verified" means measured against
+MAME frame by frame, not just "it looked right".
+
+| Game | MRA | ROM zip | Screen | State |
+|---|---|---|---|---|
+| Ray Force (US) | `Ray Force.mra` | `rayforce.zip` or `gunlock.zip` | vertical | **Verified.** Pixel-identical to MAME, sample-exact audio |
+| Gunlock (World) | `Gunlock.mra` | `rayforce.zip` or `gunlock.zip` | vertical | **Verified**, same set as above |
+| Ray Force (Japan) | `Ray Force (Japan).mra` | `rayforce.zip` or `gunlock.zip` | vertical | **Verified**, same set as above |
+| Elevator Action Returns | `experimental/Elevator Action Returns.mra` | `elvactr.zip` | horizontal | **Plays.** Video verified against MAME; sound runs but has never been correlated |
+| Bubble Bobble II | `experimental/Bubble Bobble II.mra` | `bublbob2.zip` | horizontal | **Plays.** Confirmed on hardware 2026-08-31; not yet frame-verified |
+| Bubble Memories | `experimental/Bubble Memories.mra` | `bubblem.zip` | horizontal | **Untested.** MRA is written and assembles; never loaded on hardware |
+| Puzzle Bobble 2 | `experimental/Puzzle Bobble 2.mra` | `pbobble2.zip` | horizontal | **Boots, renders wrong.** Sprites and text are correct; the playfield is truncated because `extend=0` is not enabled — see below |
+
+The three Ray Force MRAs share every ROM and differ only in one program chip,
+so a single `gunlock.zip` covers all three regions.
+
+Horizontal games need **Rotate: None** in the OSD; the vertical ones want the
+core's default. Anything under `experimental/` is exactly that — it runs, but
+it has not earned the same evidence the Ray Force set has.
+
+### Known limitations
+
+- **High scores save but do not restore.** Scores are captured into the upper
+  half of `config/nvram/<mra>.nvm` correctly; injecting them back on boot does
+  not work yet, so the table resets each power cycle.
+- **Puzzle Bobble 2's playfield is wrong.** The `extend=0` playfield geometry
+  it needs is implemented and verified but compiled out, because it costs
+  ~116 LABs the device does not currently have.
+- **`SPRLINE : LATE` reports FAIL** on the self-test page. The picture is
+  visually clean in heavy scenes; the counter itself is the open question.
+
+### The three Ray Force regions
+
+They are one ROM set with one program chip swapped, which is why a single zip
+serves all three:
 
 | MRA | Region | Differs by |
 |---|---|---|
