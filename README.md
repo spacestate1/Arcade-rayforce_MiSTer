@@ -12,8 +12,9 @@ with zero differences.
 Elevator Action Returns, Bubble Bobble II. Bubble Memories and Puzzle Bobble 2
 in progress.
 
-Sprite lag, the pivot layer and the ES5510 DSP differ from the reference. See
-[Known problems](#known-problems).
+Goes one step past the reference on sound: MAME stops at the MB87078 volume
+chip, the real cabinet then drives an LM324 and a power amp, and this core
+puts that missing 25 to 30 dB back.
 
 ## Status
 
