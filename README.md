@@ -46,11 +46,11 @@ have both been checked against MAME rather than by eye:
 - **On hardware**: the core's own audio capture (see *Audio Ring* below)
   **correlates 1.000 with MAME's mix** at the same instant of the same track.
 
-The released build (`releases/Rayforce_20260828.rbf`, build stamp
-**28165741**) passes every self-test row on a DE10-Nano. It is built from the
-tree at commit `be6737c`; the handful of commits after that are diagnostic
-and documentation changes that have not been compiled into a bitstream.
-Verify what you downloaded with `python3 tools/check_files.py`.
+The released build (`releases/Rayforce_20260831.rbf`, build stamp
+**31153138**, tagged `v1.2`) runs on a DE10-Nano with timing met on every
+clock. Every self-test row passes except `SPRLINE : LATE`, which is a counter
+question rather than a picture one (Known problems). Verify what you
+downloaded with `python3 tools/check_files.py`.
 
 **The bitstream and the MRAs must come from the same release.** The SDRAM
 region layout changed when the core became a general F3 core, so an older
@@ -80,6 +80,16 @@ row and shows wrong graphics.
 > the default is fixed and a released core now boots to the game.
 
 ## Known problems
+
+0. **High scores save but do not restore.** The table is captured correctly
+   into the upper half of `config/nvram/<mra>.nvm` on an OSD-triggered save,
+   and the file round-trips; injecting it back into the game's RAM on boot
+   does not work, so scores reset each power cycle. A `.nvm` with all four
+   guard bytes correct and a planted top score is ignored, and since
+   `save_ready` rises the RAM guard walk demonstrably completes, so the
+   failure is downstream of it. Diagnosing it needs `sh_ok` and `injected`
+   exposed on a self-test row; two builds have been spent on hypotheses
+   instead, which is the wrong way round.
 
 1. **Sprites can be missing or partial in busy scenes — boss transitions,
    heavy attract moments.** This is the most visible defect in the core and

@@ -1,11 +1,15 @@
 # Bubble Bobble II and Bubble Memories: preparation
 
-Prep for bringing the two Taito F3 Bubble Bobble games up on this core. No
-RTL has been changed and nothing has run on hardware. What this establishes:
-the MRAs, all ten self-test expectations, reference dumps for both games, and
-one finding that decides the order of work -- **the Python reference model
-does not yet reproduce these games exactly, and it must before any RTL
-comparison means anything.**
+Prep for bringing the two Taito F3 Bubble Bobble games up on this core: the
+MRAs, all ten self-test expectations, reference dumps for both games, and one
+finding that decides the order of work -- **the Python reference model does
+not yet reproduce these games exactly, and it must before any RTL comparison
+means anything.**
+
+*Written before any of it was built. Bubble Bobble II has since run on
+hardware and `extend=0` has been implemented and verified; see "Order of
+work" for what that changed and what it did not. The measurements and the
+reasoning below still stand.*
 
     bublbob2   Bubble Bobble II (Ver 2.6O 1994/12/16)   D90
     bubblem    Bubble Memories (Ver 2.4O 1996/02/15)    E21
@@ -113,22 +117,41 @@ palette and everything above y=130 match exactly.
 
 ## Order of work
 
-1. **Close the model gap first.** It is in `tools/f3_render.py`'s sprite
+Updated 2026-08-31, after the session that did items 5 and 7 out of order.
+
+**Done since this was written:**
+
+- Bubble Bobble II **runs on hardware**, with no RTL change at all. That was
+  meant to be step 7; it turned out step 1 was not a prerequisite for merely
+  running the game, only for proving it correct.
+- `extend=0` is implemented in both the model (`F3_EXTEND`) and the RTL, and
+  verified: Puzzle Bobble 2 frame 1800 is pixel-identical MAME -> model, and
+  74240/74240 model -> RTL. It was tied off for a build for want of LABs and
+  is live again, paid for by compiling the framework's Y/C encoder and
+  ascal's adaptive filter out.
+- The self-test expectation arms were added, then commented out when the
+  fitter ran 10 LABs short. The numbers are preserved in `Rayforce.sv` and
+  above; restoring them is uncommenting a block.
+
+**Still to do, in order:**
+
+1. **Close the model gap.** It is in `tools/f3_render.py`'s sprite
    block/multi handling, and until it is closed the RTL has no trustworthy
-   reference for these games. Start at bmem 4200.
-2. Widen `cfg_game` past 2 bits while it is cheap. These two games fill it:
-   ids 0/1/2/3 become Ray Force, Elevator Action Returns, Bubble Bobble II,
-   Bubble Memories, and a fifth F3 title would need the field widened and
-   every MRA's config byte re-issued.
-3. Add the `2'd2`/`2'd3` expectation arms with the numbers above. Until then
-   the self-test rows report instead of judging, which is the designed-in
-   safe default -- the games still run.
+   reference for these games. Start at bmem 4200. This gates *verifying*
+   Bubble Bobble II, not running it.
+2. **Move `rec` and `sl_d` out of MLABs**, the way `sl_y` went. Worth ~832
+   LABs, which is what the rest of the roadmap is short of. The draw has the
+   slack (5179 clocks on the worst line with 0 late), but M10K is now at
+   543/553 so blocks have to be freed first -- the debug ring is ~12.
+3. Widen `cfg_game` past 2 bits, and move the expectations into an M10K ROM
+   at the same time. The field is full at four games, and every game in the
+   tables below needs an id. Note `ST_ROWS + game_id` is a 5-bit index with
+   `ST_ROWS = 28`, so the self-test title rows need extending together with
+   it.
 4. Add `bb2-*`/`bmem-*` targets to `sim/Makefile`, modelled on the `ear-*`
    ones but with **no** visarea or lag override, since both match Ray Force.
-5. Run the benches for Bubble Bobble II against `dump/bb2` -- the cheaper
-   target, its ROM shape being Ray Force's in every region, padding included.
-6. Then Bubble Memories.
-7. Only then hardware: load, read the self-test page, screenshot attract.
+5. Bubble Memories on hardware: it has an MRA and measured expectations but
+   has never been loaded.
 
 ## What else the ROM shelf holds
 

@@ -1,4 +1,17 @@
-# Experimental — runs and renders exactly, but not finished
+# Experimental
+
+Games that run on this core but have not earned the evidence the Ray Force
+set has. Each section says what state its game is actually in.
+
+| MRA | ROM zip | State |
+|---|---|---|
+| Elevator Action Returns | `elvactr.zip` | Plays; video verified against MAME, sound never correlated |
+| Bubble Bobble II | `bublbob2.zip` | Plays on hardware; not frame-verified |
+| Bubble Memories | `bubblem.zip` | MRA written, never loaded |
+| Puzzle Bobble 2 | `pbobble2.zip` | Needs `extend=0`; see below |
+
+All four are horizontal games (MAME ROT0) on a core whose main title is
+vertical, so set **Rotate to None** in the OSD for any of them.
 
 ## Elevator Action Returns.mra
 
@@ -50,3 +63,57 @@ vertical, so set Rotate to None in the OSD.
 See "Elevator Action Returns" in `HANDOFF.md` for how it got here, including
 the three defects that turned out to be Ray Force's dimensions frozen into
 the RTL as constants.
+
+---
+
+## Bubble Bobble II.mra
+
+**Runs on hardware** (2026-08-31), and it needed no RTL change at all: an MRA
+and a config byte, which is what the universal F3 map and the game-config
+byte were built for. Title screen, character select, cutscenes and play all
+draw correctly.
+
+It shares more with Ray Force than Elevator Action Returns does. MAME runs it
+on `f3_224a`, the same 224-lines-from-31 crop Ray Force uses, and the same
+playfield `extend` setting, so its config byte's visarea field is Ray Force's
+own value. Its ROM shape is Ray Force's too, padding included.
+
+**Not frame-verified.** The reference model is exact on only 3 of 10 dumped
+frames for this game, so there is nothing trustworthy yet to check the RTL
+against. The gap is in the sprite block/multi path, which these games set on
+roughly 97 % of sprites where Ray Force sets it on 2 %. Close the model first;
+see `PREP-BUBBLE.md`.
+
+Horizontal game: set Rotate to None.
+
+## Bubble Memories.mra
+
+**Untested.** The MRA is written and assembles to the same 18.5 MB stream as
+every other set, and all ten self-test expectations are measured, but it has
+never been loaded on a board.
+
+Its one structural novelty is that it has **no `sprites_hi` ROM** at all
+(MAME declares the region `EMPTY_SPRITE_HIDATA`), so its sprites are 4bpp
+where every other set here is 6bpp. That looked like the risk and is not: the
+reference model renders three of its frames pixel-identical to MAME with that
+region all zeros.
+
+Horizontal game: set Rotate to None.
+
+## Puzzle Bobble 2.mra
+
+The first **`extend=0`** game here: eight 32x32 playfields instead of four
+64x32, which changes playfield addressing rather than a size somewhere. The
+config byte asks for it with bit [2] set (`0x87`). Note that bit's sense is
+inverted against MAME's "extend" naming, because every MRA written before it
+went live carries 0 there and every one of those games is extend=1.
+
+This is the Japanese set (`pbobble2j`), not the parent. MAME's parent
+`pbobble2` runs `init_pbobbl2p`, which patches the program ROM at
+0x40090/0x40094 to NOP a branch its own comment calls "protection check?? or
+some kind of checksum fail?". No such patch can exist here, and real hardware
+presumably ran the ROM as dumped, so the unpatched set is the honest target.
+
+It also has no `sprites_hi`, but it does have `tilemap_hi`.
+
+Horizontal game: set Rotate to None.
