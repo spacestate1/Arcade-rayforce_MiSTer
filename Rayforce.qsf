@@ -53,6 +53,18 @@ set_global_assignment -name SEED 5
 
 set_global_assignment -name VERILOG_MACRO "MISTER_FB=1"
 
+# Framework features compiled OUT to buy LABs for extend=0 (the playfield
+# geometry Puzzle Bobble 2, Darius Gaiden, Cleopatra Fortune, Grid Seeker,
+# Space Invaders '95 and Gekirindan all need). These cut MiSTer framework
+# logic, not core logic, so no game behaviour changes:
+#   YC       - the composite / S-video colour-burst encoder. Only matters if
+#              you drive a CRT off the board's analog output; HDMI and VGA
+#              are unaffected. Turn this back on if you need Y/C.
+#   ADAPTIVE - ascal's adaptive scanline filter. A video option, not a
+#              rendering feature.
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ADAPTIVE=1"
+
 #enable it only if 8bit indexed mode is used in core
 #set_global_assignment -name VERILOG_MACRO "MISTER_FB_PALETTE=1"
 

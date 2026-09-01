@@ -3,13 +3,59 @@
 An FPGA recreation of the **Taito F3 System** arcade board (1992–1998) for the
 MiSTer FPGA platform.
 
-The F3 chipset in this core — the 68020 main board, the four playfields with
-their line-RAM raster effects, the sprite engine, the priority mixer, and the
-Taito EN sound board — is written against MAME and verified against it frame by
-frame and sample by sample, so it is not tied to one game. **The game it runs
-today is Ray Force** (Taito, 1994 — *Gunlock* in Europe, *Layer Section* in
-Japan), in all three regional versions. What a second game needs is measured
-and listed under [Other F3 games](#other-f3-games) rather than guessed at.
+This core implements the F3 chipset itself: the 68020 main board, the four
+playfields with their line-RAM raster effects, the sprite engine, the priority
+mixer, and the Taito EN sound board. It is a board, not a game conversion, so
+the same bitstream runs every title in the library once that title's data is
+described to it.
+
+The behaviour of each chip is taken from MAME's F3 driver, which is the most
+complete public documentation of how this hardware actually behaves. Taito
+published no register-level specification, so `taito_f3.cpp` and
+`taito_f3_v.cpp` stand in for the datasheets: they record the playfield
+addressing modes, the sprite list format, the line-RAM effects and the
+priority rules that the silicon implements. Where that documentation is
+itself uncertain its own comments say so, and those places are listed under
+[Known problems](#known-problems) rather than papered over.
+
+Because the documentation is executable, it doubles as the acceptance test.
+Every rendering claim here is measured against MAME frame by frame and every
+audio claim sample by sample, so "correct" means a pixel count and a sample
+count rather than a judgement.
+
+### Where this core differs from that reference
+
+This core is a subset of MAME's behaviour, not a superset, and the gaps are
+worth knowing before the percentages below are read as scores.
+
+* **Sprite lag is 1 frame; MAME uses 2** for both Ray Force and Elevator
+  Action Returns. This is a real divergence rather than an unknown, and the
+  benches cannot see it because they hand the sprite list over from two
+  frames back themselves. MAME's own source calls its value a guess.
+* **The pivot (pixel) layer is an 8 KB mirror**, not the real 64 KB RAM. Its
+  block RAM was spent on the sound board. Neither game shipped here writes
+  meaningful data to it, and that assumption is re-checked on every run by a
+  counter on the self-test page.
+* **The ES5510 DSP is a stub.** Its host port answers the sound driver's
+  presence check correctly, which is what the driver needs, but the signal
+  processor behind it is not modelled. MAME states its own ES5510 emulation
+  is imperfect.
+* **Where MAME is uncertain, so is this core.** Several video control fields
+  are marked unemulated or unimplemented in `taito_f3_v.cpp`, and the pixel
+  layer's palette mirroring is an admitted hack. Matching MAME on those
+  fields proves nothing about the hardware, and they are listed rather than
+  counted as passes.
+
+The one place this core deliberately goes beyond the reference is the analog
+output stage. MAME models the sound path as far as the MB87078 volume chip
+and stops; the real cabinet then drives an LM324 and a power amplifier, which
+is the missing 25 to 30 dB that the OSD's Audio Boost stands in for.
+
+**Games it runs today:** Ray Force (Taito, 1994; *Gunlock* in Europe, *Layer
+Section* in Japan) in all three regional versions, Elevator Action Returns,
+and Bubble Bobble II. Bubble Memories and Puzzle Bobble 2 have MRAs at
+varying stages. What any further title needs is measured and listed under
+[Other F3 games](#other-f3-games) rather than guessed at.
 
 ## Status
 

@@ -1219,7 +1219,15 @@ rf_video_pipe vpipe
     .div(vid_div), .hcnt(vid_hcnt), .vcnt(vid_vcnt),
     .hblank(hblank), .vblank(vblank), .rate_60(rate_60),
     .ctrl0(vctrl0), .ctrl1(vctrl1), .flip(1'b1), .vis_mode(cfg_vis),
-    // EXTEND IS TIED OFF, 2026-08-31, and the RTL behind it is kept.
+    // EXTEND IS LIVE again as of the Puzzle Bobble 2 build: the LABs came
+    // from compiling the framework's Y/C encoder and ascal's adaptive
+    // filter out (see the VERILOG_MACRO block in Rayforce.qsf), which costs
+    // no game behaviour. If a future build runs out of room again, tying
+    // this back to 1'b1 folds every extend mux away and is the cheapest
+    // ~116 LABs in the design -- at the price of the games below.
+    //
+    // Previous note, kept because the reasoning still applies:
+    // EXTEND WAS TIED OFF, 2026-08-31, and the RTL behind it is kept.
     // extend=0 is implemented and verified end to end -- the model against
     // MAME (Puzzle Bobble 2 frame 1800 pixel-identical) and the RTL against
     // the model (all seven bench suites at baseline pixel counts) -- but it
@@ -1233,7 +1241,7 @@ rf_video_pipe vpipe
     // LAB budget has real headroom -- see PREP-BUBBLE.md for the plan (the
     // expectations ROM, and the record store is the elephant at ~19 % of the
     // device). Nothing else needs changing to bring it back.
-    .extend(1'b1),
+    .extend(cfg_extend),
     .line_addr(v_line_addr), .line_q(v_line_q),
     .pf_addr(v_pf_addr),     .pf_q(v_pf_q),
     .pal_addr(v_pal_addr),   .pal_q(v_pal_q),

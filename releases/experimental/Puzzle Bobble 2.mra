@@ -105,10 +105,14 @@
                         rather than failing against another game's
                         numbers. The page TITLE row will be garbage:
                         only ids 0 and 1 have title rows defined.
-         bit [2] extend is reserved and not read - and this game is
-         the reason that matters. Its true value here is 0. -->
+         bit [2] = 1 asks for NON-extend (eight 32x32 playfields), which is
+                        what this game is. Note the inverted sense against
+                        MAME's "extend" naming: every MRA written before this
+                        bit went live carries 0 there and every one of those
+                        games is extend=1, so 0 has to keep meaning extend=1.
+                        0x87 = game id 2, visarea f3, non-extend. -->
   <rom index="1">
-    <part>83</part>
+    <part>87</part>
   </rom>
 
   <nvram index="254" size="256"/>
