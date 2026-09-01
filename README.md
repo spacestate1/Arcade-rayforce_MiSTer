@@ -1,31 +1,19 @@
 # Taito F3 System for MiSTer
 
 **The arcade board, not a port of one game.** An FPGA recreation of the Taito
-F3 System (1992-1998) for MiSTer: the 68020 main board, four playfields with
-full line-RAM raster effects, the sprite engine with zoom and priority
-mixing, and the Taito EN sound board with its ES5505 sampler.
+F3 System (1992-1998) for MiSTer. One bitstream runs the whole library; adding
+a game is an MRA and a config byte, not a new core.
 
-One bitstream runs the whole library. Adding a game is an MRA and a config
-byte, not a new core.
+Verified against MAME, which stands in for the datasheets Taito never
+published: 15 consecutive frames pixel-identical, 1.15 million ES5505 samples
+with zero differences.
 
-**Pixel-exact, and measured.** Taito published no register-level
-documentation, so MAME's F3 driver serves as the datasheet, and because that
-documentation is executable it doubles as the test bench. Video is verified
-frame by frame and audio sample by sample against it:
+**Plays now:** Ray Force (*Gunlock*, *Layer Section*) in all three regions,
+Elevator Action Returns, Bubble Bobble II. Bubble Memories and Puzzle Bobble 2
+in progress.
 
-* 15 consecutive frames pixel-identical, 71,680 of 71,680 pixels each
-* 1.15 million ES5505 samples with zero differences
-* The board's own audio capture correlating 1.000 with MAME's mix
-
-**Playable now:** Ray Force (1994, *Gunlock* in Europe, *Layer Section* in
-Japan) in all three regions, Elevator Action Returns, and Bubble Bobble II.
-Bubble Memories and Puzzle Bobble 2 are in progress.
-
-**Honest about the gaps.** Sprite lag runs a frame ahead of MAME's, the pivot
-layer is an 8 KB mirror rather than the full 64 KB, and the ES5510 DSP is a
-host-port stub. Where MAME's own source marks a field unemulated, so is this.
-Full detail under [Known problems](#known-problems); nothing here is counted
-as a pass that has not been measured.
+Sprite lag, the pivot layer and the ES5510 DSP differ from the reference. See
+[Known problems](#known-problems).
 
 ## Status
 
